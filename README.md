@@ -1,20 +1,20 @@
-# Open sBTC Sponsor Relay (OSSR)
+# Open Stacks Sponsor Relay (OSSR)
 
-## Open fee-abstraction infrastructure for Stacks
+## Open token-based fee-abstraction infrastructure for Stacks
 
 ### One-line proposal
 
-Open sBTC Sponsor Relay is an open-source, multi-operator network that lets users execute Stacks transactions without holding STX, while independent relayers pay the network fee in STX and receive reimbursement in sBTC sats.
+Open Stacks Sponsor Relay is an open-source, multi-operator network that lets users execute Stacks transactions without holding STX. Independent relayers pay the network fee in STX and receive reimbursement in a supported token. The first PoC uses sBTC; future adapters could support assets such as USDCx.
 
 ---
 
 ## 1. Executive summary
 
-Stacks supports sponsored transactions in which the transaction originator authorizes an action while a separate sponsor account supplies the nonce, signature, and STX network fee. The origin signs first and the sponsor signs afterward. Although the user experiences the transaction as being paid in sBTC, the protocol-level fee remains denominated in microSTX.
+Stacks supports sponsored transactions in which the transaction originator authorizes an action while a separate sponsor account supplies the nonce, signature, and STX network fee. The origin signs first and the sponsor signs afterward. Although the user may experience the transaction as being paid in a supported token, the protocol-level fee remains denominated in microSTX.
 
-Open sBTC Sponsor Relay turns this existing capability into shared public infrastructure.
+Open Stacks Sponsor Relay turns this existing capability into shared public infrastructure.
 
-Instead of every wallet and application operating a private STX sponsor, independent relay operators can run a standard daemon, advertise sponsorship policies, quote fees in sats, validate user-signed transactions, pay the required STX fee, and broadcast them to the Stacks network.
+Instead of every wallet and application operating a private STX sponsor, independent relay operators can run a standard daemon, advertise sponsorship policies, quote fees in a supported token, validate user-signed transactions, pay the required STX fee, and broadcast them to the Stacks network. The first PoC quotes sBTC fees in sats.
 
 ```text
 User holds sBTC but no STX
@@ -38,7 +38,7 @@ Stacks executes the transaction
           └── Sponsor receives its fee in sats
 ```
 
-The initial version would support explicitly integrated actions such as:
+The first sBTC-focused version would support explicitly integrated actions such as:
 
 * Sending sBTC.
 * Requesting an sBTC withdrawal.
@@ -47,7 +47,7 @@ The initial version would support explicitly integrated actions such as:
 * Purchasing products or services through apps.
 * Application-subsidized onboarding transactions.
 
-The project would not change Stacks gas economics. STX remains the network fee asset; the relay provides a Bitcoin-denominated abstraction above it.
+The project would not change Stacks gas economics. STX remains the network fee asset; the relay provides a token-denominated abstraction above it. In the first PoC that token and its user-facing unit are sBTC and sats.
 
 ---
 
@@ -66,21 +66,21 @@ This creates several points of friction:
 
 Stacks documentation now describes transaction-fee sponsorship as a way for users to pay transaction fees using sBTC rather than holding STX. Existing sBTC design work also concluded that sponsored transactions are the appropriate onboarding mechanism, while leaving a dynamic sponsorship market open for third-party implementation.
 
-The missing component is an **open and reusable relay protocol**.
+The missing component is an **open and reusable relay protocol** that is not permanently coupled to one reimbursement asset.
 
 ---
 
 ## 3. Proposed solution
 
-Open sBTC Sponsor Relay consists of:
+Open Stacks Sponsor Relay consists of:
 
 ### Sponsor Relay Daemon
 
-An open-source service operated by anyone willing to maintain an STX treasury and accept sBTC reimbursement.
+An open-source service operated by anyone willing to maintain an STX treasury and accept reimbursement in one or more supported tokens.
 
 ### Sponsor Adapter Contracts
 
-Audited Clarity contracts that combine an sBTC fee payment with a supported application action.
+Audited, token-specific Clarity contracts that combine a reimbursement payment with a supported application action.
 
 ### Relay Discovery
 
@@ -88,7 +88,7 @@ A standard mechanism through which wallets find available relay operators and th
 
 ### Quote Protocol
 
-A signed quote format defining the sponsor, sat-denominated price, STX fee limit, supported action and expiration.
+A signed quote format defining the sponsor, reimbursement asset and amount, STX fee limit, supported action, and expiration.
 
 ### Wallet SDK
 
@@ -98,17 +98,23 @@ A TypeScript package that retrieves quotes, builds sponsored transactions, verif
 
 Infrastructure for monitoring sponsor balances, nonces, pending transactions, revenue, errors and supported contracts.
 
+### Reimbursement Asset Adapters
+
+Token-specific modules that define the reimbursement asset, base unit, pricing source, Clarity adapter, post-conditions, policy limits, and validation rules.
+
+The relay protocol is asset-aware, but support is never assumed merely because a token implements SIP-010. Each asset must be explicitly integrated and allowlisted. The first implementation supports sBTC denominated in sats. A later USDCx integration would require its own reviewed adapter, precision and rounding rules, pricing source, policies, and tests.
+
 ---
 
 ## 4. Design principles
 
-### Bitcoin-only user experience
+### Token-native user experience
 
-A user with sBTC should be able to perform supported actions without first acquiring STX.
+A user with a supported token should be able to perform supported actions without first acquiring STX. The PoC proves this experience with sBTC.
 
 ### No user-fund custody
 
-For atomic adapter transactions, the relay never takes custody of the user’s sBTC. Payment happens within the Stacks transaction.
+For atomic adapter transactions, the relay never takes custody of the user’s reimbursement tokens. Payment happens within the Stacks transaction.
 
 ### Open operation
 
@@ -120,7 +126,7 @@ Wallets can compare several relay quotes instead of depending on one provider.
 
 ### Explicit user limits
 
-The user sees the sponsor fee in sats before signing and can use fungible-token post-conditions to limit the total amount that may leave their account. Stacks transaction post-conditions support fungible-token transfer limits and abort execution when the resulting asset movements violate the user’s conditions.
+The user sees the sponsor fee in the selected token before signing and can use fungible-token post-conditions to limit the total amount that may leave their account. In the sBTC PoC, the fee is displayed in sats. Stacks transaction post-conditions support fungible-token transfer limits and abort execution when the resulting asset movements violate the user’s conditions.
 
 ### No consensus modification
 
@@ -141,7 +147,7 @@ Stacks sponsored authorization separates two roles:
 
 Both accounts sign the transaction. The user explicitly signs it as sponsor-enabled, after which the sponsor adds its own spending condition.
 
-The Stacks authorization structure still records its fee in microSTX. Open sBTC Sponsor Relay therefore does not make sBTC a native network gas token. It converts the user-facing obligation into sats while the relay handles STX settlement.
+The Stacks authorization structure still records its fee in microSTX. Open Stacks Sponsor Relay therefore does not make sBTC, USDCx, or another reimbursement asset a native network gas token. It converts the user-facing obligation into the selected token while the relay handles STX settlement. The PoC quotes sBTC fees in sats.
 
 ### Example
 
@@ -158,7 +164,7 @@ Relay reimbursement:      received in sBTC
 
 ## 6. Atomic adapter model
 
-The most secure MVP uses fee-aware Clarity adapters.
+The most secure PoC uses fee-aware Clarity adapters.
 
 A sponsored sBTC transfer adapter would conceptually perform:
 
@@ -461,11 +467,11 @@ A relay sponsors a limited number of transactions per address or application.
 
 A wallet or application prepays the relay for a monthly transaction allowance.
 
-No protocol token is necessary. Operators earn sBTC directly and spend STX directly.
+No protocol token is necessary. Operators receive the configured reimbursement asset directly and spend STX directly. The first PoC reimburses operators in sBTC.
 
 ---
 
-## 10. Why an allowlisted MVP
+## 10. Why an allowlisted PoC
 
 A generic relay that sponsors arbitrary contract calls is unsafe.
 
@@ -480,7 +486,7 @@ The relay could be asked to sign:
 
 Earlier sBTC design work therefore proposed validating the contract address and public function before sponsorship.
 
-The Open sBTC Sponsor Relay MVP should use a public but permissioned-by-policy model:
+The Open Stacks Sponsor Relay PoC should use a public but permissioned-by-policy model:
 
 ```text
 Open participation for relay operators
@@ -507,7 +513,7 @@ sBTC reimbursement reverts
 Sponsor receives nothing
 ```
 
-The MVP mitigates this through:
+The PoC mitigates this through:
 
 * Full transaction simulation.
 * Contract and function allowlists.
@@ -545,7 +551,7 @@ Users deposit sBTC into a non-custodial contract and issue narrowly scoped autho
 
 If Stacks introduces atomic transaction bundles, one transaction could pay the sponsor in sBTC and another could execute any application action, with bundle-wide all-or-nothing settlement.
 
-The MVP should not depend on bundles.
+The PoC should not depend on bundles.
 
 ---
 
@@ -639,7 +645,7 @@ No DAO or governance token is required for initial deployment.
 The project should publish:
 
 ```text
-open-sbtc-relay/
+open-stacks-sponsor-relay/
 ├── apps/
 │   ├── relay-server/
 │   ├── operator-dashboard/
@@ -667,7 +673,7 @@ open-sbtc-relay/
 
 Recommended implementation:
 
-* TypeScript relay service.
+* Rust relay service.
 * Stacks.js transaction construction.
 * Clarity contracts with Clarinet tests.
 * PostgreSQL for quote and transaction state.
@@ -677,7 +683,7 @@ Recommended implementation:
 
 ---
 
-## 16. Twelve-week MVP
+## 16. Twelve-week PoC
 
 ### Milestone 1 — Protocol specification
 
@@ -781,7 +787,7 @@ The primary product metric is:
 
 Earlier official sBTC work described a centralized sponsoring server with allowlisted calls, multiple sponsor wallets, fee estimation and status endpoints. It intentionally left a dynamic fee market for later third-party development.
 
-Open sBTC Sponsor Relay expands this into:
+Open Stacks Sponsor Relay expands this into:
 
 * A public protocol rather than one server.
 * Multiple independent relay operators.
@@ -794,16 +800,16 @@ Open sBTC Sponsor Relay expands this into:
 * Application-funded and user-funded sponsorship.
 * A path toward generic sponsorship.
 
-The project is therefore not another wallet. It is a shared transaction layer for wallets, merchants and Stacks applications.
+The project is therefore not another wallet and not an sBTC-only service. It is a shared transaction layer for wallets, merchants and Stacks applications, introduced through an sBTC-first PoC.
 
 ---
 
 ## 19. Long-term vision
 
-The long-term objective is a permissionless sBTC fee market:
+The long-term objective is a permissionless sponsorship market across supported Stacks tokens:
 
 ```text
-Wallet
+Wallet requests an sBTC-sponsored action
   │
   ├── Relay A: 24 sats
   ├── Relay B: 29 sats
@@ -826,6 +832,7 @@ Independent operators compete on:
 * Geographic availability.
 * Application subsidies.
 * Treasury capacity.
+* Supported reimbursement assets.
 
 Over time, sponsored transactions could become a default wallet primitive, allowing Stacks applications to present a Bitcoin-native experience while preserving STX as the underlying network fee asset.
 
@@ -833,12 +840,12 @@ Over time, sponsored transactions could become a default wallet primitive, allow
 
 ## 20. Conclusion
 
-Open sBTC Sponsor Relay makes the existing Stacks sponsorship mechanism accessible as public infrastructure.
+Open Stacks Sponsor Relay makes the existing Stacks sponsorship mechanism accessible as public infrastructure.
 
-It requires no consensus change for its first version. It preserves user authorization, allows operators to recover STX costs in sats, supports competition among sponsors and removes the requirement that every sBTC user first obtain STX.
+It requires no consensus change for its first version. It preserves user authorization, allows operators to recover STX costs in a supported token, supports competition among sponsors and removes the requirement that token holders first obtain STX.
 
-The proposed MVP focuses on the narrowest credible promise:
+The proposed PoC focuses on the narrowest credible promise:
 
 > Send, withdraw and use sBTC on Stacks while paying only in sats.
 
-From that foundation, the project can develop into an open sponsorship market supporting wallets, merchants, applications, DeFi protocols and broader Bitcoin-denominated activity across Stacks.
+From that sBTC foundation, the project can develop into an open sponsorship market supporting wallets, merchants, applications, DeFi protocols, and additional assets such as USDCx.
