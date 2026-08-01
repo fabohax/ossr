@@ -18,6 +18,8 @@ The first PoC will prove one promise:
 
 > A wallet with testnet sBTC and zero STX can send sBTC; the OSSR relay pays the STX network fee, the recipient receives the requested amount, and the relay receives the exact quoted fee in sats.
 
+This PoC is the **OSSR v0.1** release target. It handles one user action in one sponsored Stacks transaction. Batching is intentionally deferred to **OSSR v0.2**, where it will be implemented and benchmarked only after the v0.1 transaction path provides a working baseline.
+
 The plan has two stages:
 
 1. **Pre-application proof:** a small technical spike built before submitting the grant application.
@@ -66,6 +68,7 @@ The following are outside the first grant:
 - HSM integration.
 - Formal external security audit.
 - Transaction bundles.
+- Batched settlement, payment-intent queues, and the OSSR vault design proposed for v0.2.
 - A DAO or protocol token.
 
 These features remain possible Phase 2 work after the core transaction flow is proven.
@@ -1066,6 +1069,7 @@ The application should link to:
 
 After the PoC succeeds:
 
+- OSSR v0.2 batching prototype and testnet benchmarks, following the draft [batching protocol](specs/ossr-batching.md).
 - Sponsored sBTC withdrawal.
 - USDCx reimbursement adapter and sponsored actions.
 - Additional reviewed SIP-010 reimbursement assets.

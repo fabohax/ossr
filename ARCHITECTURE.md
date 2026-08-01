@@ -48,6 +48,7 @@ The proof of concept uses existing Stacks sponsored transactions and a dedicated
 - Fee bumping and automatic nonce-gap repair.
 - A production operator dashboard.
 - Cross-relay replay coordination.
+- Batched payment intents, vault custody, and multi-user settlement (proposed for OSSR v0.2).
 
 These are expected extensions after the core transaction path is demonstrated.
 

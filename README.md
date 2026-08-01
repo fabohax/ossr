@@ -14,6 +14,11 @@ Stacks supports sponsored transactions in which the transaction originator autho
 
 Open Stacks Sponsor Relay turns this existing capability into shared public infrastructure.
 
+OSSR is being developed in two deliberately separate protocol releases:
+
+* **v0.1 — single-transaction sponsorship:** prove the core flow with one user-authorized sBTC transfer per sponsored Stacks transaction. This is the current PoC and grant scope.
+* **v0.2 — batching:** after v0.1 is working and measured on testnet, test whether multiple SIP-018 payment intents can be settled safely and economically in one operator-funded transaction. The draft [OSSR Batching Protocol](specs/ossr-batching.md) describes this proposed phase; it is not part of v0.1 acceptance.
+
 Instead of every wallet and application operating a private STX sponsor, independent relay operators can run a standard daemon, advertise sponsorship policies, quote fees in a supported token, validate user-signed transactions, pay the required STX fee, and broadcast them to the Stacks network. The first PoC quotes sBTC fees in sats.
 
 ```text
@@ -130,7 +135,7 @@ The user sees the sponsor fee in the selected token before signing and can use f
 
 ### No consensus modification
 
-The first version uses existing sponsored transaction functionality and Clarity contracts.
+Version 0.1 uses existing sponsored transaction functionality and Clarity contracts. The proposed v0.2 batching design also targets existing primitives, but remains experimental until its contract limits, costs, and security properties are tested.
 
 ### Progressive decentralization
 
