@@ -6,7 +6,7 @@
 - **Stage:** PoC proof of concept
 - **Target environment:** Stacks testnet
 - **Primary PoC use case:** Send sBTC without the user holding STX
-- **Architecture status:** Proposed; this repository does not yet contain an implementation
+- **Architecture status:** Phase 1 scope frozen; this repository does not yet contain an implementation
 
 ## 1. Purpose
 
@@ -347,9 +347,37 @@ Client             Relay              Database          Stacks network
 
 There is an unavoidable race between simulation and block execution. A state change can still make a simulated transaction fail, leaving the sponsor to pay STX without receiving sBTC. The allowlist, short expiry, limits, and failure reserve reduce this risk but cannot remove it.
 
-## 6. State model
+## 6. Transaction lifecycle and failure model
 
-### Quote states
+This section freezes the PoC lifecycle.  The public status names below are the
+ones returned by the API; internal persistence may record more detail but MUST
+NOT weaken any of these transitions.  In particular, a timeout, process crash,
+or client disconnect never proves that a sponsor signature or broadcast did
+not happen.
+
+### 6.1 Normal transaction lifecycle
+
+```text
+intent
+  -> quote issued
+  -> origin-signed transaction submitted
+  -> validating / simulating
+  -> sponsor nonce reserved
+  -> signing operation persisted
+  -> sponsor-signed bytes persisted
+  -> broadcast
+  -> pending
+  -> confirmed
+```
+
+At `confirmed`, the adapter has executed successfully: the recipient received
+`amount` sats, `tx-sponsor?` received `sponsor-fee` sats, and the sponsor paid
+the STX network fee.  Reimbursement is therefore not a later relay job and
+there is no separate `REIMBURSED` state in v0.1.  It is an atomic effect of the
+confirmed adapter call.  A confirmed transaction whose adapter execution
+aborts is instead reported as `aborted`; it is never reported as confirmed.
+
+### 6.2 Quote states
 
 ```text
 ISSUED ──▶ RESERVED ──▶ CONSUMED
@@ -360,19 +388,61 @@ ISSUED ──▶ RESERVED ──▶ CONSUMED
 
 - `ISSUED`: Signed and available for one submission.
 - `RESERVED`: A sponsorship request is being processed.
-- `CONSUMED`: Sponsor signing has produced a transaction.
+- `CONSUMED`: Sponsor signing has been attempted or has produced a
+  transaction.  It is never reusable automatically.
 - `EXPIRED`: The current block is beyond the quote expiry.
 - `REJECTED`: Validation or simulation permanently rejected the submission.
 
-A transient Stacks API failure should release a reservation back to `ISSUED` when safe. Once sponsor-signed bytes exist, the quote is `CONSUMED` even if broadcast returns an ambiguous result; the relay must retry or query by transaction ID, never sign a replacement blindly.
+A transient Stacks API failure may release a reservation back to `ISSUED` only
+before the signer operation begins and only when no signature could have been
+produced. Once a signer operation begins, the quote is `CONSUMED` even if the
+result is unknown. Once sponsor-signed bytes exist, an ambiguous broadcast
+result requires a retry or lookup using those exact bytes and transaction ID;
+the relay MUST NOT sign a replacement blindly.
 
-### Sponsorship states
+### 6.3 Sponsorship states
 
 ```text
-VALIDATING → SIGNED → BROADCAST → MEMPOOL → CONFIRMED
-     │          │          │          └────→ DROPPED
-     └──────────┴──────────┴───────────────→ FAILED
+VALIDATING → NONCE_RESERVED → SIGNING → SIGNED → BROADCAST → PENDING → CONFIRMED
+     │             │             │          │           │          └──────────→ ABORTED
+     └─────────────┴─────────────┴──────────┴───────────┴─────────────────────→ FAILED
+                                      │          │           │
+                                      └──────────┴───────────┴─────────────────→ DROPPED
 ```
+
+`NONCE_RESERVED` and `SIGNING` are internal durable states and are not exposed
+as separate API statuses; both appear as `validating` externally. `MEMPOOL` in
+earlier drafts is named `pending` by the v1 API.
+
+| State | Meaning and required handling |
+|---|---|
+| `VALIDATING` | The relay is decoding, binding the quote, enforcing policy, and simulating. A permanent mismatch becomes a POST rejection; a safe transient dependency failure may be retried. |
+| `NONCE_RESERVED` | The sponsor nonce is durably reserved under the sponsor lock. No second transaction may use it. |
+| `SIGNING` | A durable signer-operation ID exists before calling the signer. A crash or timeout here is an unknown-signature condition: disable automatic reuse of the quote and nonce, then reconcile or require operator review. |
+| `SIGNED` | Exact sponsored bytes and their txid are durably stored and immutable. Retry only broadcast of those bytes. |
+| `BROADCAST` | The relay submitted the exact signed bytes, or the upstream reported them already known. An ambiguous response remains reconcilable, not rejected. |
+| `PENDING` | The chain gateway observed the transaction in the mempool. |
+| `CONFIRMED` | The chain confirmed successful adapter execution and its atomic reimbursement. Terminal. |
+| `ABORTED` | The chain confirmed but the adapter aborted. No sBTC transfer or reimbursement settled; the sponsor may nevertheless have paid STX. Terminal. |
+| `DROPPED` | The transaction is no longer accepted or observed after the configured policy timeout. Terminal for v0.1; no automatic replacement or fee bumping. |
+| `FAILED` | The relay cannot safely continue automatically, including unknown signer or broadcast state. The client treats it as terminal while the operator reconciles; it may later resolve to a chain state. |
+
+### 6.4 Failure disposition
+
+| Failure class | Before sponsor signing | After a possible sponsor signature |
+|---|---|---|
+| Invalid, expired, or mismatched quote/transaction | Reject with a stable `4xx` cause; do not reserve a nonce. | Not applicable: validation must finish before signing. |
+| Sponsor unavailable, insufficient STX, signer/database/API outage | Return a retryable failure while the quote remains safe to use. | Mark `FAILED` when signature or nonce use is uncertain; reconcile before enabling signing. |
+| Simulation failure | Reject when deterministic; otherwise return a retryable dependency error. | Never sign solely because an earlier simulation succeeded. |
+| Broadcast rejection | Not applicable. | Preserve bytes and txid. A definitive rejection can become `dropped`; an ambiguous response remains `broadcast` or `failed` until queried. |
+| On-chain execution abort | Not applicable. | Report `aborted`, not `confirmed`; no reimbursement succeeds, though STX loss is possible. |
+| Confirmation timeout | Not applicable. | Continue observation until the configured drop policy; then report `dropped`. Never create a replacement in v0.1. |
+
+The `REJECTED`, `OPERATOR_UNAVAILABLE`, `INSUFFICIENT_STX`,
+`BROADCAST_FAILED`, and `CONFIRMATION_TIMEOUT` labels from the pre-grant
+roadmap are causes or operator conditions, not additional public terminal
+states. Their stable API error codes and statuses are defined by
+[`specs/relay-api.md`](specs/relay-api.md).
 
 ## 7. Persistence
 
@@ -383,7 +453,7 @@ Minimum tables:
 | Table | Important fields |
 |---|---|
 | `quotes` | quote ID, canonical payload, signature, origin, arguments hash, fee, expiry, state, timestamps |
-| `sponsorships` | quote ID, request hash, origin-signed bytes, sponsored bytes, txid, sponsor nonce, network fee, state, error code |
+| `sponsorships` | quote ID, request hash, origin-signed bytes, sponsored bytes, txid, sponsor nonce, network fee, signer operation ID, signing-started timestamp, state, error code |
 | `sponsor_accounts` | principal, last reconciled nonce, enabled flag, updated timestamp |
 | `chain_events` | txid, observed state, block height, raw status, observed timestamp |
 
@@ -394,6 +464,11 @@ Constraints:
 - `sponsorships.request_hash` is unique for idempotency.
 - Sponsor principal plus sponsor nonce is unique.
 - Binary transactions may be retained for the PoC but must never contain private keys.
+- The relay persists `SIGNING`, the operation ID, and the reserved nonce before
+  it calls the signer.
+- The relay persists exact signed bytes and txid before its first broadcast
+  attempt. If it cannot determine whether signing occurred, it leaves the
+  record non-reusable and requires reconciliation or operator review.
 
 ## 8. Trust boundaries and security
 
@@ -489,37 +564,30 @@ Minimum metrics:
 
 Alerts for the testnet pilot should cover low sponsor balance, nonce mismatch, elevated simulation failures, elevated on-chain failures, database unavailability, and signing being disabled.
 
-## 11. Proposed repository layout
+## 11. MVP 0.1 repository layout
 
 ```text
 ossr/
-├── crates/
-│   ├── relay-server/          # Rust HTTP API and sponsorship pipeline
-│   ├── protocol/              # Quote encoding and shared Rust domain types
-│   ├── transaction-validator/ # Fail-closed sponsored transaction checks
-│   └── stacks-gateway/        # Chain API abstraction
+├── apps/
+│   ├── web/                   # Wallet-facing client
+│   └── operator/              # Relay/operator service
 ├── packages/
-│   ├── client-sdk/            # TypeScript wallet-facing helpers
-│   └── demo-cli/              # Minimal wallet-like PoC
+│   ├── protocol/              # Quote and lifecycle rules
+│   ├── stacks/                # Stacks SDK and transaction mechanics
+│   ├── sbtc/                  # sBTC adapter integration
+│   └── types/                 # Shared TypeScript types
 ├── contracts/
-│   ├── sponsored-transfer.clar
-│   └── tests/
-├── fixtures/                  # Cross-language JSON and binary golden vectors
-├── migrations/                # PostgreSQL schema
-├── deploy/
-│   └── compose.yaml
-├── adr/
-├── tests/
-│   ├── integration/
-│   └── adversarial/
-├── ARCHITECTURE.md
+│   └── registry/              # Deferred registry contract boundary
+├── docs/
+│   ├── ARCHITECTURE.md
+│   ├── PROTOCOL.md
+│   └── DEMO.md
 └── README.md
 ```
 
-The Rust relay and TypeScript client share language-neutral protocol fixtures,
-JSON schemas, and binary golden vectors rather than source types. This keeps
-runtime secrets and operator policy out of the client while verifying that both
-implementations encode the same protocol bytes.
+Supporting specifications, ADRs, and roadmaps live below `docs/`. This layout
+keeps the Day 2 transaction primitive in `packages/stacks`, while reserving
+application and contract boundaries for the remaining MVP work.
 
 ## 12. Verification strategy
 

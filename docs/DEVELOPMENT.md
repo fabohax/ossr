@@ -287,7 +287,7 @@ ossr/
 │   ├── tests/
 │   ├── Clarinet.toml
 │   └── settings/
-├── specs/
+├── docs/specs/
 │   ├── relay-api.md
 │   ├── quote-format.md
 │   ├── policy-manifest.md
@@ -298,7 +298,7 @@ ossr/
 ├── deployments/
 │   ├── docker-compose.yml
 │   └── testnet/
-├── adr/
+├── docs/adr/
 ├── Cargo.toml
 ├── pnpm-workspace.yaml
 ├── DEVELOPMENT.md
@@ -1069,7 +1069,7 @@ The application should link to:
 
 After the PoC succeeds:
 
-- OSSR v0.2 batching prototype and testnet benchmarks, following the draft [batching protocol](specs/ossr-batching.md).
+- OSSR v0.2 batching prototype and testnet benchmarks, following the draft [batching protocol](specs/batching-protocol.md).
 - Sponsored sBTC withdrawal.
 - USDCx reimbursement adapter and sponsored actions.
 - Additional reviewed SIP-010 reimbursement assets.

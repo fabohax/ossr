@@ -14,10 +14,14 @@ Stacks supports sponsored transactions in which the transaction originator autho
 
 Open Stacks Sponsor Relay turns this existing capability into shared public infrastructure.
 
+## Day 2 transaction PoC
+
+The runnable, testnet-only low-level sponsorship proof is documented in [docs/DEMO.md](docs/DEMO.md). It performs the exact origin-sign → sponsor-sign → broadcast → confirmation sequence using the current Stacks SDK. Run `npm install`, configure `.env` from `.env.example`, then use `npm run poc:broadcast` with funded testnet accounts.
+
 OSSR is being developed in two deliberately separate protocol releases:
 
 * **v0.1 — single-transaction sponsorship:** prove the core flow with one user-authorized sBTC transfer per sponsored Stacks transaction. This is the current PoC and grant scope.
-* **v0.2 — batching:** after v0.1 is working and measured on testnet, test whether multiple SIP-018 payment intents can be settled safely and economically in one operator-funded transaction. The draft [OSSR Batching Protocol](specs/ossr-batching.md) describes this proposed phase; it is not part of v0.1 acceptance.
+* **v0.2 — batching:** after v0.1 is working and measured on testnet, test whether multiple SIP-018 payment intents can be settled safely and economically in one operator-funded transaction. The draft [OSSR Batching Protocol](docs/specs/batching-protocol.md) describes this proposed phase; it is not part of v0.1 acceptance.
 
 Instead of every wallet and application operating a private STX sponsor, independent relay operators can run a standard daemon, advertise sponsorship policies, quote fees in a supported token, validate user-signed transactions, pay the required STX fee, and broadcast them to the Stacks network. The first PoC quotes sBTC fees in sats.
 
