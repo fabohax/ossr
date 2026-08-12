@@ -8,6 +8,7 @@ The protocol is specified by these focused documents:
 - [Relay API](specs/relay-api.md)
 - [Quote format](specs/quote-format.md)
 - [sBTC adapter](specs/clarity-adapter.md)
+- [sBTC reimbursement](specs/reimbursement.md)
 - [Threat model](specs/threat-model.md)
 
 The executable two-party signing demonstration is in [DEMO.md](DEMO.md).

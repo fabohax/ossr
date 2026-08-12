@@ -206,6 +206,10 @@ Determine:
 
 Avoid complicated escrow at this stage.
 
+**Design delivered:** [sBTC reimbursement](../specs/reimbursement.md) defines
+the atomic settlement format, pricing policy, and confirmation rule used by
+the MVP.
+
 ---
 
 ### Day 7 — Implement reimbursement
