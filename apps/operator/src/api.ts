@@ -11,6 +11,7 @@ import {
   validateStacksAddress,
 } from '@stacks/transactions';
 import { OssrOperator } from './operator.js';
+import { SbtcReimbursementService } from './reimbursement.js';
 
 const MAX_BODY_BYTES = 256 * 1024;
 const HEX = /^0x(?:[0-9a-fA-F]{2})+$/;
@@ -23,6 +24,9 @@ export type RelayApiConfig = {
   /** Allows applications to add a stricter transaction policy. */
   validateTransaction?: (transaction: ReturnType<typeof deserializeTransaction>) => void;
   logger?: (event: string, fields?: Record<string, unknown>) => void;
+  /** Optional Day 7 worker. It pays and tracks sBTC after sponsorship confirms. */
+  reimbursementService?: SbtcReimbursementService;
+  reimbursementPollIntervalMs?: number;
 };
 
 export type SponsorResponse = {
@@ -30,6 +34,7 @@ export type SponsorResponse = {
   operator: string;
   transaction_id: string;
   fee_microstx: string;
+  sponsorship_id?: string;
 };
 
 /**
@@ -48,7 +53,14 @@ export class OssrRelayApi {
   }
 
   createServer(): Server {
-    return createServer((request, response) => void this.handle(request, response));
+    const server = createServer((request, response) => void this.handle(request, response));
+    if (this.config.reimbursementService) {
+      const interval = setInterval(() => void this.reconcileReimbursements(), this.config.reimbursementPollIntervalMs ?? 10_000);
+      interval.unref();
+      server.once('close', () => clearInterval(interval));
+      void this.reconcileReimbursements();
+    }
+    return server;
   }
 
   async sponsor(input: unknown): Promise<SponsorResponse> {
@@ -67,7 +79,11 @@ export class OssrRelayApi {
 
     const sponsored = await this.config.operator.sponsor(encoded, feeMicroStx);
     const broadcast = await this.config.operator.broadcast(sponsored.transaction);
-    const result = { status: 'accepted' as const, operator: this.config.operator.address, transaction_id: broadcast.txid, fee_microstx: feeMicroStx.toString() };
+    const sponsorshipId = broadcast.txid;
+    if (this.config.reimbursementService) {
+      await this.config.reimbursementService.create({ sponsorshipId, stacksTxId: broadcast.txid, feePaidMicroStx: feeMicroStx });
+    }
+    const result = { status: 'accepted' as const, operator: this.config.operator.address, transaction_id: broadcast.txid, fee_microstx: feeMicroStx.toString(), sponsorship_id: this.config.reimbursementService ? sponsorshipId : undefined };
     this.log('relay.sponsor.accepted', { ...result, feeMicroStx: feeMicroStx.toString() });
     return result;
   }
@@ -81,6 +97,18 @@ export class OssrRelayApi {
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const reimbursementMatch = request.url?.match(/^\/v1\/reimbursements\/([0-9a-f]{64})$/i);
+    if (request.method === 'GET' && reimbursementMatch && this.config.reimbursementService) {
+      try {
+        const record = await this.config.reimbursementService.reconcile(reimbursementMatch[1]);
+        if (!record) { respond(response, 404, { error: 'NOT_FOUND', message: 'Reimbursement not found.' }); return; }
+        respond(response, 200, record);
+      } catch (error) {
+        const relayError = toRelayError(error);
+        respond(response, relayError.status, { error: relayError.code, message: relayError.message });
+      }
+      return;
+    }
     if (request.method !== 'POST' || request.url !== '/v1/sponsor') {
       respond(response, 404, { error: 'NOT_FOUND', message: 'Use POST /v1/sponsor.' });
       return;
@@ -96,6 +124,11 @@ export class OssrRelayApi {
       this.log('relay.sponsor.rejected', { code: relayError.code, message: relayError.message });
       respond(response, relayError.status, { error: relayError.code, message: relayError.message });
     }
+  }
+
+  private async reconcileReimbursements(): Promise<void> {
+    try { await this.config.reimbursementService?.reconcilePending(); }
+    catch (error) { this.log('reimbursement.reconcile_failed', { message: error instanceof Error ? error.message : String(error) }); }
   }
 }
 
