@@ -48,7 +48,7 @@ operator health and balance; then signs and broadcasts it. The current PoC
 policy accepts only sponsored STX token transfers. A successful response is:
 
 ```json
-{ "status": "accepted", "operator": "ST...", "transaction_id": "...", "fee_microstx": "..." }
+{ "status": "BROADCAST", "operator": "ST...", "transaction_id": "...", "fee_microstx": "..." }
 ```
 
 ## Day 5 end-to-end CLI
@@ -78,7 +78,9 @@ The pricing defaults match the Day 6 policy. They may be overridden with
 `REIMBURSEMENT_MARKUP_BPS`, `REIMBURSEMENT_FAILURE_RESERVE_SATS`,
 `REIMBURSEMENT_MINIMUM_SATS`, and `REIMBURSEMENT_MAXIMUM_SATS`. Optional
 `SBTC_CONTRACT_ADDRESS` and `SBTC_CONTRACT_NAME` override the pinned testnet
-contract for a test deployment.
+contract for a test deployment. `CONFIRMATION_TIMEOUT_SECONDS` defaults to
+`86400` and determines when an unresolved broadcast becomes
+`CONFIRMATION_TIMEOUT`.
 
 Each record contains the requested economic-loop fields:
 
@@ -90,10 +92,13 @@ Each record contains the requested economic-loop fields:
   "fee_paid": "1234",
   "reimbursement_amount": "25",
   "reimbursement_tx_id": "<sBTC transfer txid>",
-  "status": "confirmed"
+  "status": "REIMBURSED"
 }
 ```
 
-Poll `GET /v1/reimbursements/<sponsorship-id>` for the current record. Status
-progression is `pending_confirmation` → `payment_broadcast` → `confirmed`;
-failed sponsorships and failed sBTC payments are terminal and never retried.
+Poll `GET /v1/reimbursements/<sponsorship-id>` for the current record. The
+durable lifecycle is `REQUESTED → ACCEPTED → SPONSORED → BROADCAST → CONFIRMED
+→ REIMBURSED`. A record created by the current relay begins at `BROADCAST`,
+because its identifier is the signed transaction ID. `REJECTED`,
+`OPERATOR_UNAVAILABLE`, `INSUFFICIENT_STX`, `BROADCAST_FAILED`,
+`CONFIRMATION_TIMEOUT`, and `REIMBURSEMENT_FAILED` are terminal failure states.

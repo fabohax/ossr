@@ -11,8 +11,14 @@ import {
 } from '@stacks/transactions';
 import { calculateReimbursement, type ReimbursementPolicy } from '../../../packages/sbtc/src/reimbursement.js';
 import type { OssrOperator } from './operator.js';
+import {
+  assertTransactionStateTransition,
+  TERMINAL_TRANSACTION_STATES,
+  type TransactionState,
+} from './transaction-state.js';
 
-export type ReimbursementStatus = 'pending_confirmation' | 'payment_broadcast' | 'confirmed' | 'sponsorship_failed' | 'reimbursement_failed';
+/** @deprecated Use TransactionState. Kept as an alias for API consumers. */
+export type ReimbursementStatus = TransactionState;
 
 /** Values are decimal strings so this record can safely be persisted as JSON. */
 export type ReimbursementRecord = {
@@ -23,6 +29,7 @@ export type ReimbursementRecord = {
   reimbursement_amount: string;
   reimbursement_tx_id?: string;
   status: ReimbursementStatus;
+  created_at: string;
   updated_at: string;
   failure_reason?: string;
 };
@@ -60,12 +67,25 @@ export class JsonReimbursementStore implements ReimbursementStore {
     try {
       const parsed: unknown = JSON.parse(await readFile(this.path, 'utf8'));
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
-      return parsed as Record<string, ReimbursementRecord>;
+      return Object.fromEntries(Object.entries(parsed as Record<string, ReimbursementRecord>).map(([id, record]) => [id, normalizeRecord(record)]));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
       throw new Error(`Could not read reimbursement store: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+}
+
+/** Read Day 7 records without turning an in-flight reimbursement into an unknown state. */
+function normalizeRecord(record: ReimbursementRecord): ReimbursementRecord {
+  const legacy: Record<string, TransactionState> = {
+    pending_confirmation: 'BROADCAST',
+    payment_broadcast: 'CONFIRMED',
+    confirmed: 'REIMBURSED',
+    sponsorship_failed: 'REJECTED',
+    reimbursement_failed: 'REIMBURSEMENT_FAILED',
+  };
+  const status = legacy[record.status] ?? record.status;
+  return { ...record, status, created_at: record.created_at ?? record.updated_at };
 }
 
 export type ReimbursementServiceConfig = {
@@ -78,10 +98,11 @@ export type ReimbursementServiceConfig = {
   sbtcContractAddress?: string;
   sbtcContractName?: string;
   paymentFeeMicroStx?: bigint;
+  /** Mark a broadcast transaction unresolved after this duration. Defaults to 24 hours. */
+  confirmationTimeoutMs?: number;
   logger?: (event: string, fields?: Record<string, unknown>) => void;
 };
 
-const TERMINAL = new Set<ReimbursementStatus>(['confirmed', 'sponsorship_failed', 'reimbursement_failed']);
 const DEFAULT_SBTC_ADDRESS = 'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4';
 
 export class SbtcReimbursementService {
@@ -110,7 +131,8 @@ export class SbtcReimbursementService {
       operator: this.config.operator.address,
       fee_paid: input.feePaidMicroStx.toString(),
       reimbursement_amount: quote.reimbursementSats.toString(),
-      status: 'pending_confirmation',
+      status: 'BROADCAST',
+      created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
     await this.config.store.put(record);
@@ -121,20 +143,24 @@ export class SbtcReimbursementService {
   async reconcile(sponsorshipId: string): Promise<ReimbursementRecord | undefined> {
     return this.serialized(async () => {
       const record = await this.config.store.get(sponsorshipId);
-      if (!record || TERMINAL.has(record.status)) return record;
-      if (record.status === 'pending_confirmation') {
+      if (!record || TERMINAL_TRANSACTION_STATES.has(record.status)) return record;
+      if (record.status === 'BROADCAST') {
         const sponsored = await this.config.operator.transactionStatus(record.stacks_tx_id);
-        if (sponsored.status === 'success') return this.broadcastPayment(record);
+        if (sponsored.status === 'success') return this.broadcastPayment(await this.transition(record, 'CONFIRMED'));
         if (sponsored.status.startsWith('abort_') || sponsored.status === 'dropped_replace_by_fee') {
-          return this.save({ ...record, status: 'sponsorship_failed', failure_reason: `Sponsored transaction ${sponsored.status}` });
+          return this.transition(record, 'REJECTED', `Sponsored transaction ${sponsored.status}`);
+        }
+        if (Date.now() - Date.parse(record.created_at) >= (this.config.confirmationTimeoutMs ?? 86_400_000)) {
+          return this.transition(record, 'CONFIRMATION_TIMEOUT', 'Sponsored transaction was not confirmed before the deadline.');
         }
         return record;
       }
-      if (!record.reimbursement_tx_id) return this.save({ ...record, status: 'reimbursement_failed', failure_reason: 'Payment transaction ID is missing.' });
+      if (record.status !== 'CONFIRMED') throw new Error(`Unknown active transaction state: ${record.status}`);
+      if (!record.reimbursement_tx_id) return this.transition(record, 'REIMBURSEMENT_FAILED', 'Payment transaction ID is missing.');
       const payment = await this.config.operator.transactionStatus(record.reimbursement_tx_id);
-      if (payment.status === 'success') return this.save({ ...record, status: 'confirmed' });
+      if (payment.status === 'success') return this.transition(record, 'REIMBURSED');
       if (payment.status.startsWith('abort_') || payment.status === 'dropped_replace_by_fee') {
-        return this.save({ ...record, status: 'reimbursement_failed', failure_reason: `sBTC payment ${payment.status}` });
+        return this.transition(record, 'REIMBURSEMENT_FAILED', `sBTC payment ${payment.status}`);
       }
       return record;
     });
@@ -143,7 +169,7 @@ export class SbtcReimbursementService {
   async reconcilePending(): Promise<ReimbursementRecord[]> {
     const records = await this.config.store.list();
     const result: ReimbursementRecord[] = [];
-    for (const record of records) if (!TERMINAL.has(record.status)) {
+    for (const record of records) if (!TERMINAL_TRANSACTION_STATES.has(record.status)) {
       const updated = await this.reconcile(record.sponsorship_id);
       if (updated) result.push(updated);
     }
@@ -165,10 +191,15 @@ export class SbtcReimbursementService {
       });
       const broadcast = await broadcastTransaction({ transaction, network: 'testnet', client: { baseUrl: this.apiUrl } });
       if (!('txid' in broadcast)) throw new Error(`sBTC payment rejected: ${JSON.stringify(broadcast)}`);
-      return this.save({ ...record, reimbursement_tx_id: broadcast.txid, status: 'payment_broadcast' });
+      return this.save({ ...record, reimbursement_tx_id: broadcast.txid });
     } catch (error) {
-      return this.save({ ...record, status: 'reimbursement_failed', failure_reason: error instanceof Error ? error.message : String(error) });
+      return this.transition(record, 'REIMBURSEMENT_FAILED', error instanceof Error ? error.message : String(error));
     }
+  }
+
+  private async transition(record: ReimbursementRecord, status: TransactionState, failureReason?: string): Promise<ReimbursementRecord> {
+    assertTransactionStateTransition(record.status, status);
+    return this.save({ ...record, status, failure_reason: failureReason });
   }
 
   private async save(record: ReimbursementRecord): Promise<ReimbursementRecord> {

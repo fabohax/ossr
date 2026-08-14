@@ -10,7 +10,8 @@
     "operator:status": "tsx apps/operator/src/cli.ts status",
     "operator:serve": "tsx apps/operator/src/cli.ts serve",
     "operator:client": "tsx apps/operator/src/client.ts",
-    "test:reimbursement": "tsx packages/sbtc/src/reimbursement.test.ts"
+    "test:reimbursement": "tsx packages/sbtc/src/reimbursement.test.ts",
+    "test:transaction-state": "tsx apps/operator/src/transaction-state.test.ts"
   },
   "dependencies": {
     "@stacks/transactions": "^7.6.0",

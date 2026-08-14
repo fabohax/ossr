@@ -30,7 +30,8 @@ export type RelayApiConfig = {
 };
 
 export type SponsorResponse = {
-  status: 'accepted';
+  /** The request has passed validation, sponsorship, and broadcast. */
+  status: 'BROADCAST';
   operator: string;
   transaction_id: string;
   fee_microstx: string;
@@ -64,10 +65,12 @@ export class OssrRelayApi {
   }
 
   async sponsor(input: unknown): Promise<SponsorResponse> {
+    this.log('relay.transaction_state', { status: 'REQUESTED' });
     const { transaction: encoded, user } = parseSponsorRequest(input);
     const transaction = deserializeOriginTransaction(encoded, user);
     this.config.validateTransaction?.(transaction);
     defaultTransactionPolicy(transaction);
+    this.log('relay.transaction_state', { status: 'ACCEPTED' });
 
     const health = await this.config.operator.health();
     if (!health.healthy) throw new RelayError(503, 'OPERATOR_UNAVAILABLE', health.reason ?? 'Operator is unavailable.');
@@ -78,13 +81,14 @@ export class OssrRelayApi {
     }
 
     const sponsored = await this.config.operator.sponsor(encoded, feeMicroStx);
+    this.log('relay.transaction_state', { status: 'SPONSORED', transactionId: sponsored.txid });
     const broadcast = await this.config.operator.broadcast(sponsored.transaction);
     const sponsorshipId = broadcast.txid;
     if (this.config.reimbursementService) {
       await this.config.reimbursementService.create({ sponsorshipId, stacksTxId: broadcast.txid, feePaidMicroStx: feeMicroStx });
     }
-    const result = { status: 'accepted' as const, operator: this.config.operator.address, transaction_id: broadcast.txid, fee_microstx: feeMicroStx.toString(), sponsorship_id: this.config.reimbursementService ? sponsorshipId : undefined };
-    this.log('relay.sponsor.accepted', { ...result, feeMicroStx: feeMicroStx.toString() });
+    const result = { status: 'BROADCAST' as const, operator: this.config.operator.address, transaction_id: broadcast.txid, fee_microstx: feeMicroStx.toString(), sponsorship_id: this.config.reimbursementService ? sponsorshipId : undefined };
+    this.log('relay.transaction_state', { status: 'BROADCAST', transactionId: broadcast.txid });
     return result;
   }
 
@@ -192,6 +196,8 @@ class RelayError extends Error {
 function toRelayError(error: unknown): RelayError {
   if (error instanceof RelayError) return error;
   const message = error instanceof Error ? error.message : 'Unexpected relay failure.';
+  if (/insufficient STX/i.test(message)) return new RelayError(503, 'INSUFFICIENT_STX', message);
+  if (/broadcast rejected/i.test(message)) return new RelayError(502, 'BROADCAST_FAILED', message);
   return new RelayError(503, 'SPONSORSHIP_FAILED', message);
 }
 

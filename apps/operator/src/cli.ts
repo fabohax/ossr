@@ -43,6 +43,7 @@ async function main(): Promise<void> {
       sbtcContractAddress: process.env.SBTC_CONTRACT_ADDRESS,
       sbtcContractName: process.env.SBTC_CONTRACT_NAME,
       paymentFeeMicroStx: BigInt(process.env.REIMBURSEMENT_PAYMENT_FEE_MICROSTX ?? '10000'),
+      confirmationTimeoutMs: Number(process.env.CONFIRMATION_TIMEOUT_SECONDS ?? '86400') * 1_000,
       policy: {
         rateNumerator: BigInt(process.env.REIMBURSEMENT_RATE_NUMERATOR ?? '1'),
         rateDenominator: BigInt(process.env.REIMBURSEMENT_RATE_DENOMINATOR ?? '100'),

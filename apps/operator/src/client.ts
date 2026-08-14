@@ -18,7 +18,7 @@ function positiveInteger(name: string, fallback: string): bigint {
   return BigInt(value);
 }
 
-type SponsorResult = { status: 'accepted'; operator: string; transaction_id: string; fee_microstx: string };
+type SponsorResult = { status: 'BROADCAST'; operator: string; transaction_id: string; fee_microstx: string };
 
 async function main(): Promise<void> {
   const userPrivateKey = required('USER_PRIVATE_KEY');
@@ -65,7 +65,7 @@ async function waitForConfirmation(txid: string, stacksApiUrl: string): Promise<
 
 function isSponsorResult(value: unknown): value is SponsorResult {
   return typeof value === 'object' && value !== null &&
-    (value as Record<string, unknown>).status === 'accepted' &&
+    (value as Record<string, unknown>).status === 'BROADCAST' &&
     typeof (value as Record<string, unknown>).operator === 'string' &&
     typeof (value as Record<string, unknown>).transaction_id === 'string' &&
     typeof (value as Record<string, unknown>).fee_microstx === 'string';
