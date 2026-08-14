@@ -1,4 +1,4 @@
-# OSSR operator (Day 3)
+# OSSR operator
 
 The testnet-only `OssrOperator` component owns one sponsor wallet. It checks its
 STX balance, serializes sponsor nonce allocation, adds sponsor authorization,
@@ -102,3 +102,46 @@ durable lifecycle is `REQUESTED → ACCEPTED → SPONSORED → BROADCAST → CON
 because its identifier is the signed transaction ID. `REJECTED`,
 `OPERATOR_UNAVAILABLE`, `INSUFFICIENT_STX`, `BROADCAST_FAILED`,
 `CONFIRMATION_TIMEOUT`, and `REIMBURSEMENT_FAILED` are terminal failure states.
+
+## Day 9 operator registry
+
+The MVP registry is a centralized JSON-backed discovery directory. Set
+`OPERATOR_REGISTRY_PATH=.ossr/operators.json` when starting the relay to expose
+these read-only endpoints:
+
+```text
+GET /v1/operators
+GET /v1/operators/<operator-id>
+```
+
+Registry writers use the `OperatorRegistry` service in `src/registry.ts`; the
+HTTP relay intentionally does not accept registry mutations. This lets a
+centralized operator run registration and heartbeat policy without publishing an
+unauthenticated write API.
+
+```ts
+import { JsonOperatorRegistryStore, OperatorRegistry } from './registry.js';
+
+const registry = new OperatorRegistry(
+  new JsonOperatorRegistryStore('.ossr/operators.json'),
+);
+await registry.register({
+  operatorId: 'operator-001',
+  publicKey: '0x02...', // compressed quote-verification public key
+  endpoint: 'https://relay.example/v1',
+  status: 'ONLINE',
+  stxBalanceMicroStx: 42_800_000n,
+  sbtcBalanceSats: 210_000n,
+  feeBps: 10,
+  supportedTransactionTypes: ['stx_transfer'],
+  reimbursementAddress: 'ST...',
+});
+```
+
+Discovery responses use JSON strings for `stx_balance_microstx` and optional
+`sbtc_balance_sats`; those are integer base units and never floats. The
+`OperatorRegistryReader` is the discovery migration seam: an on-chain adapter
+can implement `list` and `get` while preserving the application-facing record
+and endpoint response shape. `OperatorRegistryStore` remains the centralized
+MVP persistence boundary. `last_seen` is an off-chain ISO timestamp;
+an on-chain adapter can derive its equivalent from a heartbeat block height.

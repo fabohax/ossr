@@ -28,6 +28,9 @@ export type ReimbursementRecord = {
   fee_paid: string;
   reimbursement_amount: string;
   reimbursement_tx_id?: string;
+  protocol_address?: string;
+  protocol_fee_amount?: string;
+  protocol_fee_tx_id?: string;
   status: ReimbursementStatus;
   created_at: string;
   updated_at: string;
@@ -98,6 +101,11 @@ export type ReimbursementServiceConfig = {
   sbtcContractAddress?: string;
   sbtcContractName?: string;
   paymentFeeMicroStx?: bigint;
+  /** Fixed operator share for the testnet PoC, in sats. */
+  operatorPaymentSats?: bigint;
+  /** Protocol share paid separately from the operator reimbursement, in sats. */
+  protocolFeeSats?: bigint;
+  protocolAddress?: string;
   /** Mark a broadcast transaction unresolved after this duration. Defaults to 24 hours. */
   confirmationTimeoutMs?: number;
   logger?: (event: string, fields?: Record<string, unknown>) => void;
@@ -131,6 +139,8 @@ export class SbtcReimbursementService {
       operator: this.config.operator.address,
       fee_paid: input.feePaidMicroStx.toString(),
       reimbursement_amount: quote.reimbursementSats.toString(),
+      protocol_address: this.config.protocolAddress,
+      protocol_fee_amount: this.config.protocolFeeSats?.toString(),
       status: 'BROADCAST',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -146,7 +156,7 @@ export class SbtcReimbursementService {
       if (!record || TERMINAL_TRANSACTION_STATES.has(record.status)) return record;
       if (record.status === 'BROADCAST') {
         const sponsored = await this.config.operator.transactionStatus(record.stacks_tx_id);
-        if (sponsored.status === 'success') return this.broadcastPayment(await this.transition(record, 'CONFIRMED'));
+        if (sponsored.status === 'success') return this.ensurePayments(await this.transition(record, 'CONFIRMED'));
         if (sponsored.status.startsWith('abort_') || sponsored.status === 'dropped_replace_by_fee') {
           return this.transition(record, 'REJECTED', `Sponsored transaction ${sponsored.status}`);
         }
@@ -155,13 +165,16 @@ export class SbtcReimbursementService {
         }
         return record;
       }
-      if (record.status !== 'CONFIRMED') throw new Error(`Unknown active transaction state: ${record.status}`);
-      if (!record.reimbursement_tx_id) return this.transition(record, 'REIMBURSEMENT_FAILED', 'Payment transaction ID is missing.');
-      const payment = await this.config.operator.transactionStatus(record.reimbursement_tx_id);
-      if (payment.status === 'success') return this.transition(record, 'REIMBURSED');
-      if (payment.status.startsWith('abort_') || payment.status === 'dropped_replace_by_fee') {
-        return this.transition(record, 'REIMBURSEMENT_FAILED', `sBTC payment ${payment.status}`);
+      if (record.status === 'CONFIRMED') return this.ensurePayments(record);
+      if (record.status !== 'PAYMENTS_BROADCAST') throw new Error(`Unknown active transaction state: ${record.status}`);
+      if (!record.reimbursement_tx_id) return this.transition(record, 'REIMBURSEMENT_FAILED', 'Operator payment transaction ID is missing.');
+      const payments = [record.reimbursement_tx_id, record.protocol_fee_tx_id].filter((txid): txid is string => Boolean(txid));
+      const statuses = await Promise.all(payments.map(txid => this.config.operator.transactionStatus(txid)));
+      const failed = statuses.find(payment => payment.status.startsWith('abort_') || payment.status === 'dropped_replace_by_fee');
+      if (failed) {
+        return this.transition(record, 'REIMBURSEMENT_FAILED', `sBTC payment ${failed.status}`);
       }
+      if (statuses.every(payment => payment.status === 'success')) return this.transition(record, 'REIMBURSED');
       return record;
     });
   }
@@ -176,25 +189,39 @@ export class SbtcReimbursementService {
     return result;
   }
 
-  private async broadcastPayment(record: ReimbursementRecord): Promise<ReimbursementRecord> {
+  private async ensurePayments(record: ReimbursementRecord): Promise<ReimbursementRecord> {
     try {
-      const nonce = await fetchNonce({ address: this.payer, network: 'testnet', client: { baseUrl: this.apiUrl } });
-      const transaction = await makeContractCall({
-        contractAddress: this.config.sbtcContractAddress ?? DEFAULT_SBTC_ADDRESS,
-        contractName: this.config.sbtcContractName ?? 'sbtc-token',
-        functionName: 'transfer',
-        functionArgs: [uintCV(BigInt(record.reimbursement_amount)), standardPrincipalCV(this.payer), standardPrincipalCV(record.operator), noneCV()],
-        senderKey: this.config.payerPrivateKey,
-        nonce,
-        fee: this.config.paymentFeeMicroStx ?? 10_000n,
-        network: 'testnet',
-      });
-      const broadcast = await broadcastTransaction({ transaction, network: 'testnet', client: { baseUrl: this.apiUrl } });
-      if (!('txid' in broadcast)) throw new Error(`sBTC payment rejected: ${JSON.stringify(broadcast)}`);
-      return this.save({ ...record, reimbursement_tx_id: broadcast.txid });
+      let updated = record;
+      if (!updated.reimbursement_tx_id) {
+        updated = await this.save({ ...updated, reimbursement_tx_id: await this.broadcastTransfer(BigInt(updated.reimbursement_amount), updated.operator) });
+      }
+      if (this.config.protocolFeeSats && this.config.protocolFeeSats > 0n) {
+        if (!this.config.protocolAddress) throw new Error('PROTOCOL_ADDRESS is required when REIMBURSEMENT_PROTOCOL_SATS is positive.');
+        if (!updated.protocol_fee_tx_id) {
+          updated = await this.save({ ...updated, protocol_fee_tx_id: await this.broadcastTransfer(this.config.protocolFeeSats, this.config.protocolAddress) });
+        }
+      }
+      return this.transition(updated, 'PAYMENTS_BROADCAST');
     } catch (error) {
       return this.transition(record, 'REIMBURSEMENT_FAILED', error instanceof Error ? error.message : String(error));
     }
+  }
+
+  private async broadcastTransfer(amount: bigint, recipient: string): Promise<string> {
+    const nonce = await fetchNonce({ address: this.payer, network: 'testnet', client: { baseUrl: this.apiUrl } });
+    const transaction = await makeContractCall({
+      contractAddress: this.config.sbtcContractAddress ?? DEFAULT_SBTC_ADDRESS,
+      contractName: this.config.sbtcContractName ?? 'sbtc-token',
+      functionName: 'transfer',
+      functionArgs: [uintCV(amount), standardPrincipalCV(this.payer), standardPrincipalCV(recipient), noneCV()],
+      senderKey: this.config.payerPrivateKey,
+      nonce,
+      fee: this.config.paymentFeeMicroStx ?? 10_000n,
+      network: 'testnet',
+    });
+    const broadcast = await broadcastTransaction({ transaction, network: 'testnet', client: { baseUrl: this.apiUrl } });
+    if (!('txid' in broadcast)) throw new Error(`sBTC payment rejected: ${JSON.stringify(broadcast)}`);
+    return broadcast.txid;
   }
 
   private async transition(record: ReimbursementRecord, status: TransactionState, failureReason?: string): Promise<ReimbursementRecord> {

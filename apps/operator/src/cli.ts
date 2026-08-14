@@ -2,6 +2,7 @@ import { config as loadEnv } from 'dotenv';
 import { OssrOperator } from './operator.js';
 import { createRelayServer } from './api.js';
 import { JsonReimbursementStore, SbtcReimbursementService } from './reimbursement.js';
+import { JsonOperatorRegistryStore, OperatorRegistry } from './registry.js';
 
 loadEnv({ path: '.env.local', quiet: true });
 loadEnv({ quiet: true });
@@ -34,7 +35,8 @@ async function main(): Promise<void> {
   if (command === 'serve') {
     const port = Number(process.env.OPERATOR_PORT ?? '3000');
     if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error('OPERATOR_PORT must be a valid TCP port.');
-    const payerPrivateKey = process.env.REIMBURSEMENT_PAYER_PRIVATE_KEY?.trim();
+    // Testnet PoC default: the configured user wallet is the reimbursement payer.
+    const payerPrivateKey = process.env.REIMBURSEMENT_PAYER_PRIVATE_KEY?.trim() ?? process.env.USER_PRIVATE_KEY?.trim();
     const reimbursementService = payerPrivateKey ? new SbtcReimbursementService({
       operator,
       payerPrivateKey,
@@ -43,6 +45,9 @@ async function main(): Promise<void> {
       sbtcContractAddress: process.env.SBTC_CONTRACT_ADDRESS,
       sbtcContractName: process.env.SBTC_CONTRACT_NAME,
       paymentFeeMicroStx: BigInt(process.env.REIMBURSEMENT_PAYMENT_FEE_MICROSTX ?? '10000'),
+      operatorPaymentSats: BigInt(process.env.REIMBURSEMENT_OPERATOR_SATS ?? '10'),
+      protocolFeeSats: BigInt(process.env.REIMBURSEMENT_PROTOCOL_SATS ?? '2'),
+      protocolAddress: process.env.PROTOCOL_ADDRESS?.trim(),
       confirmationTimeoutMs: Number(process.env.CONFIRMATION_TIMEOUT_SECONDS ?? '86400') * 1_000,
       policy: {
         rateNumerator: BigInt(process.env.REIMBURSEMENT_RATE_NUMERATOR ?? '1'),
@@ -59,6 +64,7 @@ async function main(): Promise<void> {
       maximumFeeMicroStx: BigInt(process.env.OPERATOR_MAXIMUM_FEE_MICROSTX ?? '100000'),
       reimbursementService,
       reimbursementPollIntervalMs: Number(process.env.REIMBURSEMENT_POLL_INTERVAL_MS ?? '10000'),
+      registry: process.env.OPERATOR_REGISTRY_PATH ? new OperatorRegistry(new JsonOperatorRegistryStore(process.env.OPERATOR_REGISTRY_PATH)) : undefined,
     });
     server.listen(port, '127.0.0.1', () => console.log(JSON.stringify({ event: 'relay.listening', port, operator: operator.address })));
     return;

@@ -12,6 +12,7 @@ import {
 } from '@stacks/transactions';
 import { OssrOperator } from './operator.js';
 import { SbtcReimbursementService } from './reimbursement.js';
+import { type OperatorRegistryReader, toEntry } from './registry.js';
 
 const MAX_BODY_BYTES = 256 * 1024;
 const HEX = /^0x(?:[0-9a-fA-F]{2})+$/;
@@ -27,6 +28,8 @@ export type RelayApiConfig = {
   /** Optional Day 7 worker. It pays and tracks sBTC after sponsorship confirms. */
   reimbursementService?: SbtcReimbursementService;
   reimbursementPollIntervalMs?: number;
+  /** Optional Day 9 discovery registry. It is read-only from the relay API. */
+  registry?: OperatorRegistryReader;
 };
 
 export type SponsorResponse = {
@@ -101,6 +104,17 @@ export class OssrRelayApi {
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const operatorsMatch = request.url?.match(/^\/v1\/operators\/([^/?#]+)$/);
+    if (request.method === 'GET' && request.url === '/v1/operators' && this.config.registry) {
+      respond(response, 200, { operators: (await this.config.registry.list()).map(toEntry) });
+      return;
+    }
+    if (request.method === 'GET' && operatorsMatch && this.config.registry) {
+      const operator = await this.config.registry.get(decodeURIComponent(operatorsMatch[1]));
+      if (!operator) { respond(response, 404, { error: 'NOT_FOUND', message: 'Operator not found.' }); return; }
+      respond(response, 200, toEntry(operator));
+      return;
+    }
     const reimbursementMatch = request.url?.match(/^\/v1\/reimbursements\/([0-9a-f]{64})$/i);
     if (request.method === 'GET' && reimbursementMatch && this.config.reimbursementService) {
       try {
