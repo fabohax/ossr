@@ -114,10 +114,23 @@ GET /v1/operators
 GET /v1/operators/<operator-id>
 ```
 
-Registry writers use the `OperatorRegistry` service in `src/registry.ts`; the
-HTTP relay intentionally does not accept registry mutations. This lets a
-centralized operator run registration and heartbeat policy without publishing an
-unauthenticated write API.
+Registry writers use the `OperatorRegistry` service in `src/registry.ts`. When
+the relay has `OPERATOR_REGISTRY_PATH` configured, it also accepts this trusted
+centralized health heartbeat:
+
+```http
+POST /operator/heartbeat
+Content-Type: application/json
+
+{
+  "operator_id": "operator-001",
+  "stx_balance_microstx": "42800000",
+  "recent_successful_transactions": ["<64-character txid>"]
+}
+```
+
+The response is the updated registry entry. Put this PoC endpoint behind
+operator authentication before exposing it publicly.
 
 ```ts
 import { JsonOperatorRegistryStore, OperatorRegistry } from './registry.js';
@@ -143,5 +156,16 @@ Discovery responses use JSON strings for `stx_balance_microstx` and optional
 `OperatorRegistryReader` is the discovery migration seam: an on-chain adapter
 can implement `list` and `get` while preserving the application-facing record
 and endpoint response shape. `OperatorRegistryStore` remains the centralized
-MVP persistence boundary. `last_seen` is an off-chain ISO timestamp;
-an on-chain adapter can derive its equivalent from a heartbeat block height.
+MVP persistence boundary. `last_seen` and `last_heartbeat` are off-chain ISO
+timestamps; an on-chain adapter can derive their equivalent from a heartbeat
+block height. The registry retains a bounded outcome history, recent successful
+transaction IDs, and a rolling `failure_rate`. It marks an operator `UNHEALTHY`
+when its heartbeat is stale, its STX balance is below
+`OPERATOR_MINIMUM_BALANCE_MICROSTX`, or its failure rate exceeds
+`OPERATOR_MAXIMUM_FAILURE_RATE` (default `0.5`). The heartbeat timeout defaults
+to 60 seconds and is configured by `OPERATOR_HEARTBEAT_TIMEOUT_MS`.
+
+For client-side A → B routing, `sponsorWithFailover` from `src/failover.ts`
+tries healthy `ONLINE` registry entries in order. It retries only an explicit
+`503 INSUFFICIENT_STX` response, avoiding duplicate requests after ambiguous
+failures.

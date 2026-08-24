@@ -6,6 +6,7 @@ import {
   getAddressFromPrivateKey,
   makeContractCall,
   noneCV,
+  PostConditionMode,
   standardPrincipalCV,
   uintCV,
 } from '@stacks/transactions';
@@ -111,7 +112,7 @@ export type ReimbursementServiceConfig = {
   logger?: (event: string, fields?: Record<string, unknown>) => void;
 };
 
-const DEFAULT_SBTC_ADDRESS = 'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4';
+const DEFAULT_SBTC_ADDRESS = 'SN3VMHXEN64ZZF71JQ5VESXDWTR301XTTXGF4J8F1';
 
 export class SbtcReimbursementService {
   private readonly apiUrl: string;
@@ -133,12 +134,16 @@ export class SbtcReimbursementService {
     const existing = await this.config.store.get(input.sponsorshipId);
     if (existing) return existing;
     const quote = calculateReimbursement(input.feePaidMicroStx, this.config.policy);
+    // Allow a fixed operator payment override for the PoC (in sats).
+    const reimbursementSats = this.config.operatorPaymentSats && this.config.operatorPaymentSats > 0n
+      ? this.config.operatorPaymentSats
+      : quote.reimbursementSats;
     const record: ReimbursementRecord = {
       sponsorship_id: input.sponsorshipId,
       stacks_tx_id: input.stacksTxId,
       operator: this.config.operator.address,
       fee_paid: input.feePaidMicroStx.toString(),
-      reimbursement_amount: quote.reimbursementSats.toString(),
+      reimbursement_amount: reimbursementSats.toString(),
       protocol_address: this.config.protocolAddress,
       protocol_fee_amount: this.config.protocolFeeSats?.toString(),
       status: 'BROADCAST',
@@ -217,6 +222,9 @@ export class SbtcReimbursementService {
       senderKey: this.config.payerPrivateKey,
       nonce,
       fee: this.config.paymentFeeMicroStx ?? 10_000n,
+      // This is a direct SIP-010 payment. Without an explicit mode, the SDK
+      // defaults to deny and aborts the intended fungible-token transfer.
+      postConditionMode: PostConditionMode.Allow,
       network: 'testnet',
     });
     const broadcast = await broadcastTransaction({ transaction, network: 'testnet', client: { baseUrl: this.apiUrl } });

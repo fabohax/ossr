@@ -1,0 +1,4 @@
+[network]
+name = "mainnet"
+node_rpc_address = "https://api.hiro.so"
+deployment_fee_rate = 10

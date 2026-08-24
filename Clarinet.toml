@@ -1,0 +1,22 @@
+[project]
+name = "ossr"
+description = "Open Stacks Sponsor Relay contract harness"
+authors = []
+telemetry = false
+cache_dir = "./.cache"
+
+[contracts.operators-registry]
+path = "contracts/registry/operators-registry.clar"
+epoch = "latest"
+
+[contracts.mock-sbtc-token]
+path = "contracts/mocks/mock-sbtc-token.clar"
+epoch = "latest"
+
+[contracts.sbtc-sponsored-transfer-v1]
+path = "contracts/testing/sbtc-sponsored-transfer-v1.clar"
+epoch = "latest"
+
+[repl.analysis]
+passes = ["check_checker"]
+check_checker = { trusted_sender = false, trusted_caller = false, callee_filter = false }

@@ -12,7 +12,7 @@ import {
 } from '@stacks/transactions';
 import { OssrOperator } from './operator.js';
 import { SbtcReimbursementService } from './reimbursement.js';
-import { type OperatorRegistryReader, toEntry } from './registry.js';
+import { OperatorRegistry, type OperatorRegistryReader, toEntry } from './registry.js';
 
 const MAX_BODY_BYTES = 256 * 1024;
 const HEX = /^0x(?:[0-9a-fA-F]{2})+$/;
@@ -30,6 +30,10 @@ export type RelayApiConfig = {
   reimbursementPollIntervalMs?: number;
   /** Optional Day 9 discovery registry. It is read-only from the relay API. */
   registry?: OperatorRegistryReader;
+  /** Enables operator health mutation endpoints and relay outcome tracking. */
+  healthRegistry?: OperatorRegistry;
+  operatorId?: string;
+  healthPollIntervalMs?: number;
 };
 
 export type SponsorResponse = {
@@ -48,11 +52,14 @@ export type SponsorResponse = {
 export class OssrRelayApi {
   private readonly stacksApiUrl: string;
   private readonly maximumFeeMicroStx: bigint;
+  private readonly healthPollIntervalMs: number;
   private readonly log: NonNullable<RelayApiConfig['logger']>;
 
   constructor(private readonly config: RelayApiConfig) {
     this.stacksApiUrl = (config.stacksApiUrl ?? 'https://api.testnet.hiro.so').replace(/\/$/, '');
     this.maximumFeeMicroStx = config.maximumFeeMicroStx ?? 100_000n;
+    this.healthPollIntervalMs = config.healthPollIntervalMs ?? 10_000;
+    if (!Number.isSafeInteger(this.healthPollIntervalMs) || this.healthPollIntervalMs < 1) throw new Error('healthPollIntervalMs must be a positive safe integer.');
     this.log = config.logger ?? (() => undefined);
   }
 
@@ -63,6 +70,11 @@ export class OssrRelayApi {
       interval.unref();
       server.once('close', () => clearInterval(interval));
       void this.reconcileReimbursements();
+    }
+    if (this.config.healthRegistry) {
+      const interval = setInterval(() => void this.config.healthRegistry?.list(), this.healthPollIntervalMs);
+      interval.unref();
+      server.once('close', () => clearInterval(interval));
     }
     return server;
   }
@@ -83,9 +95,17 @@ export class OssrRelayApi {
       throw new RelayError(422, 'FEE_OUT_OF_POLICY', 'Estimated network fee is outside relay policy.');
     }
 
-    const sponsored = await this.config.operator.sponsor(encoded, feeMicroStx);
-    this.log('relay.transaction_state', { status: 'SPONSORED', transactionId: sponsored.txid });
-    const broadcast = await this.config.operator.broadcast(sponsored.transaction);
+    let sponsored: Awaited<ReturnType<OssrOperator['sponsor']>>;
+    let broadcast: Awaited<ReturnType<OssrOperator['broadcast']>>;
+    try {
+      sponsored = await this.config.operator.sponsor(encoded, feeMicroStx);
+      this.log('relay.transaction_state', { status: 'SPONSORED', transactionId: sponsored.txid });
+      broadcast = await this.config.operator.broadcast(sponsored.transaction);
+    } catch (error) {
+      await this.recordFailure();
+      throw error;
+    }
+    await this.recordSuccess(broadcast.txid);
     const sponsorshipId = broadcast.txid;
     if (this.config.reimbursementService) {
       await this.config.reimbursementService.create({ sponsorshipId, stacksTxId: broadcast.txid, feePaidMicroStx: feeMicroStx });
@@ -104,6 +124,23 @@ export class OssrRelayApi {
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method === 'POST' && request.url === '/operator/heartbeat' && this.config.healthRegistry) {
+      if (!request.headers['content-type']?.toLowerCase().startsWith('application/json')) {
+        respond(response, 415, { error: 'UNSUPPORTED_MEDIA_TYPE', message: 'Content-Type must be application/json.' });
+        return;
+      }
+      try {
+        const heartbeat = parseHeartbeatRequest(await readJson(request));
+        respond(response, 200, toEntry(await this.config.healthRegistry.heartbeat(heartbeat.operatorId, {
+          stxBalanceMicroStx: BigInt(heartbeat.stxBalanceMicroStx),
+          recentSuccessfulTransactions: heartbeat.recentSuccessfulTransactions,
+        })));
+      } catch (error) {
+        const relayError = toRelayError(error);
+        respond(response, relayError.status, { error: relayError.code, message: relayError.message });
+      }
+      return;
+    }
     const operatorsMatch = request.url?.match(/^\/v1\/operators\/([^/?#]+)$/);
     if (request.method === 'GET' && request.url === '/v1/operators' && this.config.registry) {
       respond(response, 200, { operators: (await this.config.registry.list()).map(toEntry) });
@@ -148,6 +185,14 @@ export class OssrRelayApi {
     try { await this.config.reimbursementService?.reconcilePending(); }
     catch (error) { this.log('reimbursement.reconcile_failed', { message: error instanceof Error ? error.message : String(error) }); }
   }
+
+  private async recordSuccess(txid: string): Promise<void> {
+    if (this.config.healthRegistry && this.config.operatorId) await this.config.healthRegistry.recordSuccess(this.config.operatorId, txid);
+  }
+
+  private async recordFailure(): Promise<void> {
+    if (this.config.healthRegistry && this.config.operatorId) await this.config.healthRegistry.recordFailure(this.config.operatorId);
+  }
 }
 
 export function createRelayServer(config: RelayApiConfig): Server {
@@ -161,6 +206,16 @@ function parseSponsorRequest(input: unknown): { transaction: string; user: strin
   if (!HEX.test(input.transaction)) throw new RelayError(400, 'INVALID_TRANSACTION', 'transaction must be an even-length 0x-prefixed hexadecimal string.');
   if (!validateStacksAddress(input.user)) throw new RelayError(400, 'INVALID_USER', 'user must be a valid canonical Stacks address.');
   return { transaction: input.transaction, user: input.user };
+}
+
+function parseHeartbeatRequest(input: unknown): { operatorId: string; stxBalanceMicroStx: string; recentSuccessfulTransactions?: string[] } {
+  if (!isRecord(input) || typeof input.operator_id !== 'string' || typeof input.stx_balance_microstx !== 'string' || !/^\d+$/.test(input.stx_balance_microstx)) {
+    throw new RelayError(400, 'INVALID_HEARTBEAT', 'Body must contain operator_id and a non-negative integer stx_balance_microstx.');
+  }
+  if (input.recent_successful_transactions !== undefined && (!Array.isArray(input.recent_successful_transactions) || input.recent_successful_transactions.some(txid => typeof txid !== 'string' || !/^[0-9a-f]{64}$/i.test(txid)))) {
+    throw new RelayError(400, 'INVALID_HEARTBEAT', 'recent_successful_transactions must contain transaction IDs.');
+  }
+  return { operatorId: input.operator_id, stxBalanceMicroStx: input.stx_balance_microstx, recentSuccessfulTransactions: input.recent_successful_transactions as string[] | undefined };
 }
 
 function deserializeOriginTransaction(encoded: string, user: string): ReturnType<typeof deserializeTransaction> {
@@ -181,9 +236,15 @@ function originAddress(transaction: ReturnType<typeof deserializeTransaction>): 
 }
 
 function defaultTransactionPolicy(transaction: ReturnType<typeof deserializeTransaction>): void {
-  if (transaction.payload.payloadType !== PayloadType.TokenTransfer) {
-    throw new RelayError(422, 'UNSUPPORTED_TRANSACTION', 'This relay currently sponsors STX token transfers only.');
+  if (transaction.payload.payloadType === PayloadType.TokenTransfer) return;
+  if (transaction.payload.payloadType === PayloadType.ContractCall) {
+    const address = process.env.ADAPTER_CONTRACT_ADDRESS?.trim();
+    const name = process.env.ADAPTER_CONTRACT_NAME?.trim() || 'sbtc-sponsored-transfer-v1';
+    const payload = transaction.payload;
+    if (address && payload.contractAddress === address && payload.contractName.content === name && payload.functionName.content === 'sponsored-transfer') return;
+    throw new RelayError(422, 'UNSUPPORTED_TRANSACTION', 'Only the configured sBTC sponsored-transfer adapter may be sponsored.');
   }
+  throw new RelayError(422, 'UNSUPPORTED_TRANSACTION', 'Only STX transfers and the configured sBTC sponsored-transfer adapter are supported.');
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {

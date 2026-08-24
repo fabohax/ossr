@@ -36,8 +36,12 @@ async function main(): Promise<void> {
     const port = Number(process.env.OPERATOR_PORT ?? '3000');
     if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error('OPERATOR_PORT must be a valid TCP port.');
     // Testnet PoC default: the configured user wallet is the reimbursement payer.
-    const payerPrivateKey = process.env.REIMBURSEMENT_PAYER_PRIVATE_KEY?.trim() ?? process.env.USER_PRIVATE_KEY?.trim();
-    const reimbursementService = payerPrivateKey ? new SbtcReimbursementService({
+    // Fallback to the operator sponsor key so the reimbursement worker is active by default.
+    const atomicSbtcEnabled = Boolean(process.env.ADAPTER_CONTRACT_ADDRESS?.trim());
+    const payerPrivateKey = process.env.REIMBURSEMENT_PAYER_PRIVATE_KEY?.trim() ?? process.env.USER_PRIVATE_KEY?.trim() ?? process.env.SPONSOR_PRIVATE_KEY?.trim();
+    // Atomic adapter calls settle the sponsor fee in their own transaction.
+    // Running the legacy worker would pay the sponsor a second time.
+    const reimbursementService = !atomicSbtcEnabled && payerPrivateKey ? new SbtcReimbursementService({
       operator,
       payerPrivateKey,
       store: new JsonReimbursementStore(process.env.REIMBURSEMENT_STORE_PATH ?? '.ossr/reimbursements.json'),
@@ -58,13 +62,21 @@ async function main(): Promise<void> {
         maximumReimbursementSats: BigInt(process.env.REIMBURSEMENT_MAXIMUM_SATS ?? '1000'),
       },
     }) : undefined;
+    const registry = process.env.OPERATOR_REGISTRY_PATH ? new OperatorRegistry(new JsonOperatorRegistryStore(process.env.OPERATOR_REGISTRY_PATH), undefined, {
+      minimumBalanceMicroStx: BigInt(process.env.OPERATOR_MINIMUM_BALANCE_MICROSTX ?? '1'),
+      heartbeatTimeoutMs: Number(process.env.OPERATOR_HEARTBEAT_TIMEOUT_MS ?? '60000'),
+      maximumFailureRate: Number(process.env.OPERATOR_MAXIMUM_FAILURE_RATE ?? '0.5'),
+    }) : undefined;
     const server = createRelayServer({
       operator,
       stacksApiUrl: process.env.STACKS_API_URL,
       maximumFeeMicroStx: BigInt(process.env.OPERATOR_MAXIMUM_FEE_MICROSTX ?? '100000'),
       reimbursementService,
       reimbursementPollIntervalMs: Number(process.env.REIMBURSEMENT_POLL_INTERVAL_MS ?? '10000'),
-      registry: process.env.OPERATOR_REGISTRY_PATH ? new OperatorRegistry(new JsonOperatorRegistryStore(process.env.OPERATOR_REGISTRY_PATH)) : undefined,
+      registry,
+      healthRegistry: registry,
+      operatorId: process.env.OPERATOR_ID?.trim(),
+      healthPollIntervalMs: Number(process.env.OPERATOR_HEALTH_POLL_INTERVAL_MS ?? '10000'),
     });
     server.listen(port, '127.0.0.1', () => console.log(JSON.stringify({ event: 'relay.listening', port, operator: operator.address })));
     return;

@@ -6,10 +6,17 @@
     "typecheck": "tsc --noEmit",
     "poc": "tsx packages/stacks/scripts/sponsored-transaction-poc.ts",
     "poc:broadcast": "tsx packages/stacks/scripts/sponsored-transaction-poc.ts --broadcast",
+    "atomic-sbtc": "tsx packages/stacks/scripts/atomic-sbtc-transfer.ts",
+    "atomic-sbtc:submit": "tsx packages/stacks/scripts/atomic-sbtc-transfer.ts --submit",
     "operator:health": "tsx apps/operator/src/cli.ts health",
     "operator:status": "tsx apps/operator/src/cli.ts status",
     "operator:serve": "tsx apps/operator/src/cli.ts serve",
     "operator:client": "tsx apps/operator/src/client.ts",
+    "clarinet:check": "clarinet check",
+    "devnet:generate": "clarinet deployments generate --devnet --manual-cost",
+    "devnet:start": "clarinet devnet start --no-dashboard --from-genesis --use-on-disk-deployment-plan",
+    "devnet:smoke": "tsx packages/stacks/scripts/devnet-smoke.ts",
+    "test:contracts": "vitest run",
     "test:reimbursement": "tsx packages/sbtc/src/reimbursement.test.ts",
     "test:transaction-state": "tsx apps/operator/src/transaction-state.test.ts",
     "test:registry": "tsx apps/operator/src/registry.test.ts"
@@ -19,8 +26,11 @@
     "dotenv": "^17.4.2"
   },
   "devDependencies": {
+    "@stacks/clarinet-sdk": "^3.23.1",
     "@types/node": "^26.2.0",
     "tsx": "^4.23.11",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "vitest-environment-clarinet": "^3.0.2"
   }
 }
