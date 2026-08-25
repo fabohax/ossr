@@ -1,0 +1,25 @@
+{
+  "protocolVersion": "1",
+  "network": "testnet",
+  "chainId": "2147483648",
+  "stacksApiUrl": "https://api.testnet.hiro.so",
+  "relayApiVersion": "1",
+  "supportedAction": "sbtc-transfer",
+  "adapter": {
+    "contractAddressEnv": "ADAPTER_CONTRACT_ADDRESS",
+    "contractName": "sbtc-sponsored-transfer-v1",
+    "functionName": "sponsored-transfer"
+  },
+  "reimbursementAsset": {
+    "assetId": "sbtc",
+    "contractAddress": "SN3VMHXEN64ZZF71JQ5VESXDWTR301XTTXGF4J8F1",
+    "contractName": "sbtc-token",
+    "unit": "sat",
+    "decimals": "8"
+  },
+  "quote": {
+    "domainName": "ossr-quote",
+    "domainVersion": "1",
+    "defaultLifetimeBlocks": "10"
+  }
+}

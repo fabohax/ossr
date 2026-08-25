@@ -35,17 +35,40 @@ Start the local HTTP relay with:
 npm run operator:serve
 ```
 
-It listens on `127.0.0.1:3000` by default (`OPERATOR_PORT` overrides this) and
-accepts `POST /v1/sponsor`:
+It listens on `127.0.0.1:3002` by default (`OPERATOR_HOST` and
+`OPERATOR_PORT` override this). When testing the web UI from a LAN origin such
+as `http://192.168.18.82:3000`, set `OPERATOR_HOST=0.0.0.0` and include that
+origin in `OSSR_CORS_ALLOWED_ORIGINS`.
+The interface-facing v1 endpoints are:
+
+```text
+GET /v1/info
+POST /v1/quotes
+POST /v1/sponsorships
+GET /v1/sponsorships/0x<txid>
+```
+
+`POST /v1/sponsor` remains as a development alias for older scripts.
+
+Set `QUOTE_PRIVATE_KEY` to enable `POST /v1/quotes`. This key signs quotes
+only; it should be distinct from `SPONSOR_PRIVATE_KEY`.
+
+The legacy sponsorship body is:
 
 ```json
 { "transaction": "0x...", "user": "ST..." }
 ```
 
+The quote-bound sponsorship body is:
+
+```json
+{ "quoteId": "0x...", "transaction": "0x...", "user": "ST..." }
+```
+
 The relay validates the encoded testnet transaction, sponsored authorization,
-origin signature, and claimed origin address; estimates its STX fee; verifies
-operator health and balance; then signs and broadcasts it. The current PoC
-policy accepts only sponsored STX token transfers. A successful response is:
+origin signature, claimed origin address, and configured sBTC adapter target;
+estimates its STX fee; verifies operator health and balance; then signs and
+broadcasts it. A successful response is:
 
 ```json
 { "status": "BROADCAST", "operator": "ST...", "transaction_id": "...", "fee_microstx": "..." }
@@ -53,8 +76,8 @@ policy accepts only sponsored STX token transfers. A successful response is:
 
 ## Day 5 end-to-end CLI
 
-With the relay running, submit an origin-signed transaction through the full
-CLI → relay → operator → testnet flow:
+With the relay running and quote signing enabled, submit an origin-signed sBTC
+adapter transaction through the full CLI → relay → operator → testnet flow:
 
 ```sh
 npm run operator:client -- --wait

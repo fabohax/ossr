@@ -3,7 +3,7 @@ import { config as loadEnv } from 'dotenv';
 import { readFileSync, writeFileSync } from 'fs';
 import { createECDH } from 'crypto';
 
-loadEnv({ path: '.env.local', silent: true });
+loadEnv({ path: '.env.local', quiet: true });
 
 function required(name: string): string { const v = process.env[name]?.trim(); if (!v) throw new Error(`Missing ${name}`); return v; }
 

@@ -1,6 +1,5 @@
 #!/usr/bin/env tsx
 import {
-  AnchorMode,
   broadcastTransaction,
   bufferCV,
   cvToString,
@@ -73,7 +72,6 @@ async function call(
     nonce: await fetchNonce({ address: sender, network, client }),
     fee: 10_000n,
     network,
-    anchorMode: AnchorMode.Any,
     postConditionMode: PostConditionMode.Allow,
   });
   const result = await broadcastTransaction({ transaction: tx, network, client });

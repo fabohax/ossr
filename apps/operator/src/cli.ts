@@ -33,7 +33,8 @@ async function main(): Promise<void> {
     return;
   }
   if (command === 'serve') {
-    const port = Number(process.env.OPERATOR_PORT ?? '3000');
+    const port = Number(process.env.OPERATOR_PORT ?? '3002');
+    const host = process.env.OPERATOR_HOST?.trim() || '127.0.0.1';
     if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error('OPERATOR_PORT must be a valid TCP port.');
     // Testnet PoC default: the configured user wallet is the reimbursement payer.
     // Fallback to the operator sponsor key so the reimbursement worker is active by default.
@@ -77,8 +78,19 @@ async function main(): Promise<void> {
       healthRegistry: registry,
       operatorId: process.env.OPERATOR_ID?.trim(),
       healthPollIntervalMs: Number(process.env.OPERATOR_HEALTH_POLL_INTERVAL_MS ?? '10000'),
+      quotePrivateKey: process.env.QUOTE_PRIVATE_KEY?.trim(),
+      quoteKeyId: process.env.QUOTE_KEY_ID?.trim(),
+      relayId: process.env.RELAY_ID?.trim(),
+      policyVersion: process.env.OSSR_POLICY_VERSION?.trim(),
+      adapterContractAddress: process.env.ADAPTER_CONTRACT_ADDRESS?.trim(),
+      adapterContractName: process.env.ADAPTER_CONTRACT_NAME?.trim(),
+      sbtcContractAddress: process.env.SBTC_CONTRACT_ADDRESS?.trim(),
+      sbtcContractName: process.env.SBTC_CONTRACT_NAME?.trim(),
+      quoteLifetimeBlocks: BigInt(process.env.QUOTE_TTL_BLOCKS ?? '10'),
+      sponsorFeeSats: BigInt(process.env.SBTC_SPONSOR_FEE_SATS ?? process.env.REIMBURSEMENT_OPERATOR_SATS ?? '10'),
+      corsAllowedOrigins: process.env.OSSR_CORS_ALLOWED_ORIGINS?.split(',').map(origin => origin.trim()).filter(Boolean),
     });
-    server.listen(port, '127.0.0.1', () => console.log(JSON.stringify({ event: 'relay.listening', port, operator: operator.address })));
+    server.listen(port, host, () => console.log(JSON.stringify({ event: 'relay.listening', host, port, operator: operator.address })));
     return;
   }
   throw new Error('Usage: npm run operator:health | npm run operator:status -- <txid> | npm run operator:serve');

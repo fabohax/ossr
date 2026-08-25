@@ -3,10 +3,17 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "types": ["node", "vitest/globals", "vitest-environment-clarinet"],
+    "types": ["node", "vitest/globals"],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["packages/**/*.ts", "apps/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
+  "include": [
+    "packages/**/*.ts",
+    "apps/**/*.ts",
+    "tests/**/*.ts",
+    "vitest.config.ts",
+    "node_modules/@stacks/clarinet-sdk/vitest-helpers/src/global.d.ts",
+    "node_modules/@stacks/clarinet-sdk/vitest-helpers/src/vitest.d.ts"
+  ]
 }

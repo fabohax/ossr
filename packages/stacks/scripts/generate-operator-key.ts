@@ -2,10 +2,10 @@
 import { config as loadEnv } from 'dotenv';
 import { randomBytes } from 'crypto';
 import { bytesToHex } from '@stacks/common';
-import { privateKeyToString, createStacksPrivateKey, getAddressFromPrivateKey } from '@stacks/transactions';
+import { getAddressFromPrivateKey } from '@stacks/transactions';
 import { writeFileSync, readFileSync } from 'fs';
 
-loadEnv({ path: '.env.local', silent: true });
+loadEnv({ path: '.env.local', quiet: true });
 
 function setEnv(key: string, value: string) {
   const path = '.env.local';

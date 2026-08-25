@@ -4,3 +4,7 @@ node_modules/
 .cache/
 .ossr/
 tmp/
+.next/
+**/.next/
+**/node_modules/
+**/*.tsbuildinfo

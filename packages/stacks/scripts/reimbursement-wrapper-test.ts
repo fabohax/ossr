@@ -9,25 +9,17 @@
  *   PAYLOAD_HEX=010203 npx tsx packages/stacks/scripts/reimbursement-wrapper-test.ts
  */
 
-import { StacksTestnet } from '@stacks/network';
 import {
   makeContractCall,
   contractPrincipalCV,
   uintCV,
   bufferCV,
-  broadcastTransaction,
-  AnchorMode,
-  standardPrincipalCV,
-  makeUnsignedTransaction,
-  serializeCV,
-  TransactionVersion,
-  StacksNetwork
 } from '@stacks/transactions';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
 
-const network = new StacksTestnet();
+const network = 'testnet' as const;
 
 async function main() {
   const contractAddress = process.env.CONTRACT_ADDRESS || '';
@@ -61,7 +53,6 @@ async function main() {
     functionArgs: args,
     senderKey: process.env.PRIVATE_KEY || undefined,
     network,
-    anchorMode: AnchorMode.Any
   } as any;
 
   console.log('TX OPTIONS (preview):', {
@@ -79,7 +70,7 @@ async function main() {
   try {
     const tx = await makeContractCall(txOptions);
     console.log('Unsigned/signed tx ready. Raw hex preview:');
-    console.log(tx.serialize().toString('hex'));
+    console.log(`0x${tx.serialize()}`);
   } catch (err) {
     console.error('Failed to build tx:', err);
   }

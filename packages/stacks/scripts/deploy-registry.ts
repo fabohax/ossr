@@ -7,7 +7,6 @@ import {
   broadcastTransaction,
   fetchNonce,
   getAddressFromPrivateKey,
-  AnchorMode,
 } from '@stacks/transactions';
 
 loadEnv({ path: '.env.local', quiet: true });
@@ -58,7 +57,7 @@ async function main() {
   // Use a generous fee to avoid FeeTooLow rejections (2 STX)
   const fee = 2000000n;
 
-  const tx = await makeContractDeploy({ senderKey: privateKey, contractName, codeBody, network, fee, nonce, anchorMode: AnchorMode.Any });
+  const tx = await makeContractDeploy({ senderKey: privateKey, contractName, codeBody, network, fee, nonce });
   const res = await broadcastTransaction({ transaction: tx, network });
   console.log('broadcast result:', res);
   const txid = (res && typeof res === 'object' && (res as any).txid) ? (res as any).txid : undefined;

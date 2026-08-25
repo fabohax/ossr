@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 import { config as loadEnv } from 'dotenv';
-import { makeContractCall, uintCV, bufferCV, makeUnsignedTransaction, serializeCV } from '@stacks/transactions';
+import { makeContractCall, bufferCV } from '@stacks/transactions';
 import { getAddressFromPrivateKey, fetchNonce, broadcastTransaction } from '@stacks/transactions';
 loadEnv({ path: '.env.local', quiet: true });
 loadEnv({ quiet: true });

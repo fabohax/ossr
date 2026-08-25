@@ -1,6 +1,4 @@
 #!/usr/bin/env tsx
-import fetch from 'node-fetch';
-
 const txid = process.argv[2] || process.env.TXID;
 if (!txid) {
   console.error('Usage: node wait-tx.ts <txid>');
@@ -15,7 +13,7 @@ async function main() {
     try {
       const res = await fetch(`${api.replace(/\/$/, '')}/extended/v1/tx/${txid}`);
       if (res.status === 200) {
-        const j = await res.json();
+        const j = await res.json() as { tx_status?: string };
         console.log('status:', j.tx_status);
         if (j.tx_status === 'success') return 0;
         if (j.tx_status && j.tx_status.startsWith('abort_')) throw new Error('tx failed: ' + j.tx_status);

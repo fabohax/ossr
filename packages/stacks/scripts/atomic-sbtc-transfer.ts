@@ -44,8 +44,9 @@ async function main(): Promise<void> {
   const apiUrl = (process.env.OSSR_API_URL ?? 'http://127.0.0.1:3000').replace(/\/$/, '');
   const stacksApiUrl = (process.env.STACKS_API_URL ?? 'https://api.testnet.hiro.so').replace(/\/$/, '');
   const info = await (await fetch(`${stacksApiUrl}/v2/info`)).json() as { stacks_tip_height?: number };
-  if (!Number.isSafeInteger(info.stacks_tip_height)) throw new Error('Could not determine the current Stacks height.');
-  const expiry = BigInt(info.stacks_tip_height + Number(process.env.QUOTE_TTL_BLOCKS ?? '10'));
+  const stacksTipHeight = info.stacks_tip_height;
+  if (typeof stacksTipHeight !== 'number' || !Number.isSafeInteger(stacksTipHeight)) throw new Error('Could not determine the current Stacks height.');
+  const expiry = BigInt(stacksTipHeight + Number(process.env.QUOTE_TTL_BLOCKS ?? '10'));
   const quoteId = randomBytes(32);
   const memoHex = process.env.SBTC_MEMO_HEX?.trim();
   if (memoHex && (!/^(?:[0-9a-fA-F]{2}){0,34}$/.test(memoHex))) throw new Error('SBTC_MEMO_HEX must contain at most 34 bytes of hexadecimal data.');
