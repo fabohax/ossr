@@ -54,8 +54,7 @@ async function main() {
 
   console.log('Deploying', contractName, 'from', senderAddress);
 
-  // Use a generous fee to avoid FeeTooLow rejections (2 STX)
-  const fee = 2000000n;
+  const fee = BigInt(process.env.DEPLOYMENT_FEE_USTX ?? '3000');
 
   const tx = await makeContractDeploy({ senderKey: privateKey, contractName, codeBody, network, fee, nonce });
   const res = await broadcastTransaction({ transaction: tx, network });

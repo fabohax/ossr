@@ -1,8 +1,8 @@
 ;; Operators Registry
-;; Allows operators to register by paying a 1 STX subscription fee.
+;; Allows operators to register by paying a 10 STX subscription fee.
 
 (define-constant OWNER 'ST2SY3PZHMVQMYN1W4SBJ9MPHW4P8J01ST7TVQ68X)
-(define-constant SUBSCRIPTION_FEE u1000000) ;; 1 STX in microstx
+(define-constant SUBSCRIPTION_FEE u10000000) ;; 10 STX in microstx
 
 (define-map operators
   { owner: principal }
