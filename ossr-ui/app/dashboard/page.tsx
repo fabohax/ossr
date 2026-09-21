@@ -43,6 +43,10 @@ type WalletAddress = {
 
 const connectedAddressKey = 'ossr-ui:connected-stx-address';
 const recentRecipientsKey = 'ossr-ui:recent-recipients';
+const configuredQuoteRefreshSeconds = Number(process.env.NEXT_PUBLIC_OSSR_QUOTE_REFRESH_SECONDS ?? '30');
+const quoteRefreshSeconds = Number.isFinite(configuredQuoteRefreshSeconds) && configuredQuoteRefreshSeconds >= 5
+  ? Math.floor(configuredQuoteRefreshSeconds)
+  : 30;
 
 function savedRecentRecipients(): string[] {
   if (typeof window === 'undefined') return [];
@@ -241,6 +245,28 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
   }, [relayUrl]);
 
   useEffect(() => {
+    let cancelled = false;
+    const refreshPricing = async () => {
+      try {
+        const info = await fetchRelayInfo(relayUrl);
+        if (!cancelled) setRelayInfo(info);
+      } catch {
+        // Keep the last valid pricing metadata during transient relay failures.
+      }
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refreshPricing();
+    };
+    const interval = window.setInterval(refreshPricing, quoteRefreshSeconds * 1_000);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [relayUrl]);
+
+  useEffect(() => {
     setMaxSponsorFeeSats(defaultSponsorFeeSats);
   }, [defaultSponsorFeeSats]);
 
@@ -347,12 +373,18 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
 
   async function createQuote() {
     const quote = await run('quote', async () => {
+      // Refresh cost inputs immediately before requesting the signed quote so
+      // the wallet approval never relies only on the periodic preview.
+      const latestInfo = await fetchRelayInfo(relayUrl);
+      setRelayInfo(latestInfo);
+      const latestMaximumFee = estimatedSponsorFee(BigInt(amountSats), latestInfo.limits).toString();
+      setMaxSponsorFeeSats(latestMaximumFee);
       const quote = await requestQuote({
         relayUrl,
         origin,
         recipient,
         amountSats,
-        maxSponsorFeeSats,
+        maxSponsorFeeSats: latestMaximumFee,
         ...(memo.trim() ? { memo: normalizeMemo(memo) } : {}),
       });
       setQuoteResponse(quote);
@@ -542,7 +574,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                         </div>
                         <div className="grid grid-cols-2 gap-4 px-1 text-sm">
                           <div className="flex items-center justify-between">
-                            <span className="text-muted-foreground">Fee</span>
+                            <span className="text-muted-foreground" title={`Pricing refreshes every ${quoteRefreshSeconds} seconds`}>Fee · {quoteRefreshSeconds}s</span>
                             <span className="font-medium">{defaultSponsorFeeSats} sats</span>
                           </div>
                           <div className="flex items-center justify-between border-l border-border pl-4">
