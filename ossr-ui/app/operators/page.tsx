@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { ArrowLeft, ArrowRight, CheckCircle2, CircleAlert, ExternalLink, HeartPulse, KeyRound, Radio, Server, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CheckCircle2, CircleAlert, ExternalLink, KeyRound, Radio, Server, ShieldCheck } from 'lucide-react';
+import { OperatorRegistration } from './operator-registration';
 
 export const metadata: Metadata = {
   title: 'Become an Operator — OSSR',
@@ -15,12 +16,11 @@ const requirements = [
 ];
 
 const registrationFields = [
-  'Owner principal and quote public key',
-  'Minimum locked STX collateral',
-  'Metadata URI and content hash',
-  'Supported OSSR protocol versions',
-  'Network, action, adapter, and reimbursement capabilities',
-  'Advertised pricing and sponsorship capacity',
+  'Owner principal from the connected wallet',
+  'Operator ID of up to 64 ASCII characters',
+  'Compressed 33-byte quote public key',
+  'HTTPS relay endpoint',
+  'Registration block height',
 ];
 
 export default function OperatorsPage() {
@@ -46,11 +46,21 @@ export default function OperatorsPage() {
           <div className="flex items-start gap-3">
             <CircleAlert className="mt-0.5 size-5 shrink-0 text-primary" />
             <div>
-              <h2 className="font-medium">Registry deployment is not live yet</h2>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">The version 1 registry and lifecycle are specified, but the final Clarity ABI and deployed contract are still pending. You can run and harden a relay today, then register once the contract address and parameters are published.</p>
+              <h2 className="font-medium">Registry is live on testnet</h2>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">Connect the owner wallet below to publish an operator ID, compressed quote-signing public key, and HTTPS relay endpoint. Registration costs 10 STX plus the network fee.</p>
             </div>
           </div>
         </div>
+      </section>
+
+      <section id="register" className="mx-auto grid w-[calc(100%_-_3rem)] max-w-[1180px] gap-10 py-20 lg:grid-cols-[.8fr_1.2fr] lg:items-start lg:py-28">
+        <div>
+          <span className="font-mono text-[10px] font-semibold tracking-[0.18em] text-primary">ON-CHAIN REGISTRATION</span>
+          <h2 className="mt-4 text-4xl font-semibold tracking-[-0.03em]">Make your relay discoverable.</h2>
+          <p className="mt-5 text-sm leading-6 text-muted-foreground">The connected testnet wallet becomes the record owner. Review every value in the wallet prompt; registrations are immutable in this registry version and duplicate registration is rejected before payment.</p>
+          <p className="mt-4 font-mono text-xs leading-5 text-muted-foreground">ST2SY3P…Q68X.operators-registry-v7</p>
+        </div>
+        <OperatorRegistration />
       </section>
 
       <section className="border-y border-white/10 bg-white/[0.02]">
@@ -85,18 +95,18 @@ export default function OperatorsPage() {
             Confirm the public metadata and readiness endpoints return your intended relay identity, sponsor principal, quote key, policy, and a healthy STX balance.
             <Code>{`curl -fsS https://relay.example/v1/info\ncurl -fsS https://relay.example/health/ready`}</Code>
           </Step>
-          <Step number="03" title="Publish verified metadata">
-            Host a bounded metadata document over HTTPS or content-addressed storage. It should identify your operator, API URL, region, description, website, and support channels. Keep its content hash ready for registration.
+          <Step number="03" title="Prepare your public identity">
+            Choose a stable operator ID, expose the relay over HTTPS, and copy the compressed public key from your isolated quote signer. Never enter the signer&apos;s private key in this form.
           </Step>
           <Step number="04" title="Register on-chain">
-            When the registry deploys, call its registration function from the owner principal and lock at least the published minimum collateral. Registration becomes active only after all required fields and capabilities validate.
+            Use the registration form above from the owner principal. The wallet pays the fixed 10 STX subscription directly to the registry owner and publishes the relay record in one transaction.
             <ul className="mt-5 grid gap-2 sm:grid-cols-2">
               {registrationFields.map(field => <li key={field} className="flex items-start gap-2 text-sm text-muted-foreground"><CheckCircle2 className="mt-0.5 size-4 shrink-0 text-primary" />{field}</li>)}
             </ul>
           </Step>
-          <Step number="05" title="Stay active">
-            Submit owner-authorized heartbeats, keep collateral above the minimum, maintain accurate pricing and capabilities, rotate quote keys visibly, and keep the HTTPS relay healthy. Stale or inactive operators are excluded from discovery.
-            <div className="mt-5 inline-flex items-center gap-2 text-sm text-primary"><HeartPulse className="size-4" /> Recommended heartbeat window: 500 blocks</div>
+          <Step number="05" title="Verify and stay reachable">
+            Track the submitted transaction to confirmation, verify the stored record through the contract&apos;s read-only function, and keep the registered HTTPS endpoint online. This registry version does not support editing a registration in place.
+            <div className="mt-5 inline-flex items-center gap-2 text-sm text-primary"><Radio className="size-4" /> Keep the registered endpoint healthy and publicly reachable</div>
           </Step>
         </div>
       </section>

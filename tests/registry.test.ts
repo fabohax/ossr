@@ -38,6 +38,19 @@ describe("operators-registry", () => {
         "last-seen": Cl.uint(simnet.blockHeight),
       }),
     );
+
+    const duplicate = simnet.callPublicFn(
+      "operators-registry",
+      "register",
+      [
+        Cl.stringAscii("operator-002"),
+        Cl.buffer(publicKey),
+        Cl.stringAscii("https://relay-2.example/v1"),
+      ],
+      operator,
+    );
+
+    expect(duplicate.result).toBeErr(Cl.uint(2));
   });
 
   it("only lets the owner withdraw contract STX", () => {

@@ -3,6 +3,8 @@
 
 (define-constant OWNER 'ST2SY3PZHMVQMYN1W4SBJ9MPHW4P8J01ST7TVQ68X)
 (define-constant SUBSCRIPTION_FEE u10000000) ;; 10 STX in microstx
+(define-constant ERR_FEE_TRANSFER_FAILED (err u1))
+(define-constant ERR_ALREADY_REGISTERED (err u2))
 
 (define-map operators
   { owner: principal }
@@ -12,15 +14,15 @@
     last-seen: uint })
 
 (define-public (register (operator-id (string-ascii 64)) (public-key (buff 33)) (endpoint (string-ascii 256)))
-  (begin
-    ;; charge subscription fee to OWNER
-    (let ((fee-res (stx-transfer? SUBSCRIPTION_FEE tx-sender OWNER)))
-      (if (is-ok fee-res)
+  (if (is-some (map-get? operators { owner: tx-sender }))
+      ERR_ALREADY_REGISTERED
+      (match (stx-transfer? SUBSCRIPTION_FEE tx-sender OWNER)
+        success
           (begin
             (map-insert operators { owner: tx-sender }
                         { operator-id: operator-id, public-key: public-key, endpoint: endpoint, last-seen: stacks-block-height })
             (ok tx-sender))
-          (err u1)))))
+        error-code ERR_FEE_TRANSFER_FAILED)))
 
 (define-read-only (get-operator (owner principal))
   (map-get? operators { owner: owner }))
