@@ -1,24 +1,25 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, CheckCircle2, CircleAlert, ExternalLink, Loader2, LogOut, Radio, RefreshCw, Send, ShieldCheck, Wallet } from 'lucide-react';
+import { ArrowRight, CheckCircle2, CircleAlert, ExternalLink, Loader2, LogOut, Radio, RefreshCw, Send, ShieldCheck, Wallet } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList } from '@/components/ui/combobox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { enableDarkStacksWalletSelector } from '@/lib/stacks-wallet-theme';
 import {
   adapterErrorFromStatus,
   describeChainStatus,
   extractRawTransaction,
   fetchRelayInfo,
   fetchSbtcBalance,
-  fetchStacksTipHeight,
   fetchSponsorshipStatus,
   isFailedChainStatus,
   isTerminalChainStatus,
@@ -41,6 +42,48 @@ type WalletAddress = {
 };
 
 const connectedAddressKey = 'ossr-ui:connected-stx-address';
+const recentRecipientsKey = 'ossr-ui:recent-recipients';
+
+function savedRecentRecipients(): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(recentRecipientsKey) ?? '[]');
+    return Array.isArray(saved) ? saved.filter((value): value is string => typeof value === 'string').slice(0, 5) : [];
+  } catch {
+    return [];
+  }
+}
+
+function estimatedSponsorFee(amount: bigint, limits?: RelayInfo['limits']): bigint {
+  const fixed = limits?.sponsorFeeSats && /^\d+$/.test(limits.sponsorFeeSats)
+    ? BigInt(limits.sponsorFeeSats)
+    : undefined;
+  const legacyPercentage = limits?.sponsorFeeBps && /^\d+$/.test(limits.sponsorFeeBps)
+    ? (amount * BigInt(limits.sponsorFeeBps) + 9_999n) / 10_000n
+    : undefined;
+  const scale = limits?.pricingScaleSats && /^[1-9]\d*$/.test(limits.pricingScaleSats)
+    ? BigInt(limits.pricingScaleSats)
+    : 100n;
+  const growth = limits?.pricingGrowthSats && /^[1-9]\d*$/.test(limits.pricingGrowthSats)
+    ? BigInt(limits.pricingGrowthSats)
+    : 2n;
+  const logarithmic = growth * ceilLog2(1n + (amount + scale - 1n) / scale);
+  const requested = fixed ?? legacyPercentage ?? logarithmic;
+  const minimum = BigInt(limits?.minimumSponsorFeeSats && /^\d+$/.test(limits.minimumSponsorFeeSats) ? limits.minimumSponsorFeeSats : '1');
+  const breakEven = BigInt(limits?.breakEvenFeeSats && /^\d+$/.test(limits.breakEvenFeeSats) ? limits.breakEvenFeeSats : '1');
+  return [requested, minimum, breakEven].reduce((maximum, fee) => fee > maximum ? fee : maximum, 1n);
+}
+
+function ceilLog2(value: bigint): bigint {
+  if (value <= 1n) return 0n;
+  let exponent = 0n;
+  let power = 1n;
+  while (power < value) {
+    power <<= 1n;
+    exponent += 1n;
+  }
+  return exponent;
+}
 
 function defaultRelayUrl(): string {
   if (process.env.NEXT_PUBLIC_OSSR_RELAY_URL) return process.env.NEXT_PUBLIC_OSSR_RELAY_URL;
@@ -94,6 +137,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
   const [relayInfo, setRelayInfo] = useState<RelayInfo>();
   const [origin, setOrigin] = useState(savedConnectedAddress);
   const [recipient, setRecipient] = useState('');
+  const [recentRecipients, setRecentRecipients] = useState(savedRecentRecipients);
   const [amountSats, setAmountSats] = useState('');
   const [maxSponsorFeeSats, setMaxSponsorFeeSats] = useState('1');
   const [memo, setMemo] = useState('');
@@ -105,10 +149,9 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
   const [error, setError] = useState<DisplayError>();
   const [autoRelayChecked, setAutoRelayChecked] = useState(false);
   const [transactionModalOpen, setTransactionModalOpen] = useState(false);
-  const [quoteRenewing, setQuoteRenewing] = useState(false);
   const [statusObservationCount, setStatusObservationCount] = useState(0);
   const statusObservation = useRef({ value: '', count: 0 });
-  const quoteRefreshInFlight = useRef(false);
+  const recipientComboboxPortalRef = useRef<HTMLDivElement>(null);
 
   const totalSats = useMemo(() => {
     if (!quoteResponse?.quote.sponsorFee || !/^\d+$/.test(amountSats)) return undefined;
@@ -117,16 +160,21 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
 
   const defaultSponsorFeeSats = useMemo(() => {
     const amount = /^[1-9]\d*$/.test(amountSats) ? BigInt(amountSats) : 0n;
-    const limits = relayInfo?.limits;
-    const percentageOrFixed = limits?.sponsorFeeBps && /^\d+$/.test(limits.sponsorFeeBps)
-      ? (amount * BigInt(limits.sponsorFeeBps) + 9_999n) / 10_000n
-      : BigInt(limits?.sponsorFeeSats && /^\d+$/.test(limits.sponsorFeeSats) ? limits.sponsorFeeSats : '1');
-    const minimum = BigInt(limits?.minimumSponsorFeeSats && /^\d+$/.test(limits.minimumSponsorFeeSats) ? limits.minimumSponsorFeeSats : '1');
-    const breakEven = BigInt(limits?.breakEvenFeeSats && /^\d+$/.test(limits.breakEvenFeeSats) ? limits.breakEvenFeeSats : '1');
-    return [percentageOrFixed, minimum, breakEven]
-      .reduce((maximum, fee) => fee > maximum ? fee : maximum, 1n)
-      .toString();
+    return estimatedSponsorFee(amount, relayInfo?.limits).toString();
   }, [amountSats, relayInfo]);
+
+  function setMaximumAmount() {
+    if (!sbtcBalance || !/^\d+$/.test(sbtcBalance.balanceSats)) return;
+    const balance = BigInt(sbtcBalance.balanceSats);
+    let low = 0n;
+    let high = balance;
+    while (low < high) {
+      const candidate = (low + high + 1n) / 2n;
+      if (candidate + estimatedSponsorFee(candidate, relayInfo?.limits) <= balance) low = candidate;
+      else high = candidate - 1n;
+    }
+    setAmountSats(low.toString());
+  }
 
   const memoByteLength = useMemo(() => new TextEncoder().encode(memo).length, [memo]);
 
@@ -149,7 +197,6 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
   async function loadRelayInfo({ quiet = false }: { quiet?: boolean } = {}) {
     const info = await fetchRelayInfo(relayUrl);
     setRelayInfo(info);
-    if (info.limits?.sponsorFeeSats && !info.limits.sponsorFeeBps) setMaxSponsorFeeSats(info.limits.sponsorFeeSats);
     if (!quiet) setError(undefined);
     return info;
   }
@@ -178,7 +225,6 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
         const info = await fetchRelayInfo(relayUrl);
         if (cancelled) return;
         setRelayInfo(info);
-        if (info.limits?.sponsorFeeSats && !info.limits.sponsorFeeBps) setMaxSponsorFeeSats(info.limits.sponsorFeeSats);
       } catch {
         if (!cancelled) setRelayInfo(undefined);
       } finally {
@@ -197,45 +243,6 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
   useEffect(() => {
     setMaxSponsorFeeSats(defaultSponsorFeeSats);
   }, [defaultSponsorFeeSats]);
-
-  useEffect(() => {
-    if (!transactionModalOpen || sponsorship || !quoteResponse || busy === 'submit') return;
-    let cancelled = false;
-
-    const renewIfNeeded = async () => {
-      if (quoteRefreshInFlight.current) return;
-      quoteRefreshInFlight.current = true;
-      try {
-        const tipHeight = await fetchStacksTipHeight();
-        if (cancelled || BigInt(tipHeight + 1) < BigInt(quoteResponse.quote.expiresAtBlock)) return;
-        setQuoteRenewing(true);
-        const freshQuote = await requestQuote({
-          relayUrl,
-          origin,
-          recipient,
-          amountSats,
-          maxSponsorFeeSats,
-          ...(memo.trim() ? { memo: normalizeMemo(memo) } : {}),
-        });
-        if (!cancelled) {
-          setQuoteResponse(freshQuote);
-          setError(undefined);
-        }
-      } catch {
-        // The existing quote remains visible; submission will retry renewal if it is obsolete.
-      } finally {
-        quoteRefreshInFlight.current = false;
-        setQuoteRenewing(false);
-      }
-    };
-
-    void renewIfNeeded();
-    const interval = window.setInterval(renewIfNeeded, 1_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [amountSats, busy, maxSponsorFeeSats, memo, origin, quoteResponse, recipient, relayUrl, sponsorship, transactionModalOpen]);
 
   useEffect(() => {
     if (!origin) {
@@ -316,12 +323,13 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
 
   async function connectWallet({ replaceCurrent = false }: { replaceCurrent?: boolean } = {}) {
     await run('wallet', async () => {
-      const { disconnect, request } = await import('@stacks/connect');
+      const { connect, disconnect } = await import('@stacks/connect');
       if (replaceCurrent) {
         disconnect();
         clearConnectedWalletState();
       }
-      const response = await request('getAddresses');
+      const stopWalletThemeObserver = enableDarkStacksWalletSelector();
+      const response = await connect({ forceWalletSelect: true }).finally(stopWalletThemeObserver);
       const addresses = readAddresses(response);
       const stx = addresses.find(address => address.symbol === 'STX' && address.address);
       if (!stx?.address) throw new Error('Wallet did not return a Stacks address.');
@@ -354,7 +362,12 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
       setStatusObservationCount(0);
       return quote;
     });
-    if (quote) setTransactionModalOpen(true);
+    if (quote) {
+      const updatedRecipients = [recipient, ...recentRecipients.filter(address => address !== recipient)].slice(0, 5);
+      setRecentRecipients(updatedRecipients);
+      window.localStorage.setItem(recentRecipientsKey, JSON.stringify(updatedRecipients));
+      await signAndSubmit(quote);
+    }
   }
 
   async function replaceObsoleteQuote(): Promise<QuoteResponse> {
@@ -388,12 +401,12 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
     });
   }
 
-  async function signAndSubmit() {
+  async function signAndSubmit(quoteToSubmit = quoteResponse) {
     await run('submit', async () => {
-      if (!quoteResponse) throw new Error('Request a quote first.');
+      if (!quoteToSubmit) throw new Error('Request a quote first.');
       const { request } = await import('@stacks/connect');
       const prepared = prepareWalletContractCall({
-        quote: quoteResponse.quote,
+        quote: quoteToSubmit.quote,
         recipient,
         amountSats,
         ...(memo.trim() ? { memo: normalizeMemo(memo) } : {}),
@@ -413,7 +426,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
       try {
         response = await submitSponsorship({
           relayUrl,
-          quoteId: quoteResponse.quote.quoteId,
+          quoteId: quoteToSubmit.quote.quoteId,
           transaction,
           user: origin,
         });
@@ -433,12 +446,11 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
       statusObservation.current = { value: '', count: 0 };
       setStatusObservationCount(0);
       setSponsorship(response);
+      setTransactionModalOpen(true);
     });
   }
 
   const canQuote = Boolean(origin && recipient && amountSats && maxSponsorFeeSats && memoByteLength <= 34 && !insufficientBalance);
-  const canSubmit = Boolean(quoteResponse && !sponsorship && !failed && !quoteRenewing);
-
   return (
     <main className={embedded ? 'bg-background text-foreground' : 'min-h-screen bg-background text-foreground'}>
       <div className={embedded ? 'mx-auto flex w-full flex-col' : 'mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 pt-5 pb-72 sm:px-6 sm:pb-44 lg:px-8 lg:pt-8 lg:pb-32'}>
@@ -511,9 +523,21 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                   <TabsContent value="transfer" className={embedded ? 'grid gap-3' : 'grid gap-4'}>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div className="grid gap-2 sm:col-span-2">
-                        <Label htmlFor="amount">Amount</Label>
+                        <div className="flex items-center justify-between">
+                          <Label htmlFor="amount">Amount</Label>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="xs"
+                            className="h-auto px-1.5 py-0.5 text-[10px] font-semibold tracking-wider text-primary hover:bg-primary/10 hover:text-primary"
+                            onClick={setMaximumAmount}
+                            disabled={!sbtcBalance || !/^\d+$/.test(sbtcBalance.balanceSats)}
+                          >
+                            MAX
+                          </Button>
+                        </div>
                         <div className="relative">
-                          <Input id="amount" value={amountSats} onChange={event => setAmountSats(event.target.value)} inputMode="numeric" autoComplete="off" placeholder="0" className="h-16 bg-transparent pr-14 text-3xl dark:bg-transparent md:text-3xl" />
+                          <Input id="amount" value={amountSats} onChange={event => setAmountSats(event.target.value)} inputMode="numeric" autoComplete="off" placeholder="0" className={`h-16 bg-transparent pr-14 text-3xl dark:bg-transparent md:text-3xl ${embedded ? 'focus-visible:border-input focus-visible:ring-0' : ''}`} />
                           <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">sats</span>
                         </div>
                         <div className="grid grid-cols-2 gap-4 px-1 text-sm">
@@ -527,18 +551,35 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                           </div>
                         </div>
                       </div>
-                      <div className="grid gap-2 sm:col-span-2 [container-type:inline-size]">
-                        <Label htmlFor="recipient">To</Label>
-                        <Input
-                          id="recipient"
-                          value={recipient}
-                          onChange={event => setRecipient(event.target.value.trim())}
-                          placeholder="ST…"
-                          spellCheck={false}
-                          autoCapitalize="characters"
-                          autoComplete="off"
-                          className="h-16 bg-transparent font-mono !text-[clamp(0.6875rem,3.7cqw,1rem)] tracking-[-0.02em] dark:bg-transparent"
-                        />
+                      <div ref={recipientComboboxPortalRef} className="grid gap-2 sm:col-span-2 [container-type:inline-size]">
+                        <Label htmlFor="recipient" className="justify-self-center">To</Label>
+                        <Combobox
+                          items={recentRecipients}
+                          value={recipient || null}
+                          inputValue={recipient}
+                          onInputValueChange={value => setRecipient(value.trim())}
+                          onValueChange={value => setRecipient(value ?? '')}
+                        >
+                          <ComboboxInput
+                            id="recipient"
+                            placeholder="ST…"
+                            spellCheck={false}
+                            autoCapitalize="characters"
+                            autoComplete="off"
+                            showClear={Boolean(recipient)}
+                            className={`h-16 bg-transparent dark:bg-transparent [&_input]:font-mono [&_input]:!text-[clamp(0.6875rem,3.7cqw,1rem)] [&_input]:tracking-[-0.02em] ${embedded ? 'has-[[data-slot=input-group-control]:focus-visible]:border-input has-[[data-slot=input-group-control]:focus-visible]:ring-0' : ''}`}
+                          />
+                          <ComboboxContent portalContainer={recipientComboboxPortalRef}>
+                            <ComboboxEmpty>No saved addresses</ComboboxEmpty>
+                            <ComboboxList>
+                              {recentRecipients.map(address => (
+                                <ComboboxItem key={address} value={address} className="min-h-10 font-mono text-xs">
+                                  <span className="truncate">{address}</span>
+                                </ComboboxItem>
+                              ))}
+                            </ComboboxList>
+                          </ComboboxContent>
+                        </Combobox>
                       </div>
                       <Accordion type="single" collapsible className="sm:col-span-2">
                         <AccordionItem value="memo" className="rounded-lg border px-3">
@@ -546,7 +587,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                           <AccordionContent className="pb-3">
                             <div className="grid gap-2">
                               <Label htmlFor="memo">Memo text <span className="font-normal text-muted-foreground">(optional)</span></Label>
-                              <Input id="memo" value={memo} onChange={event => setMemo(event.target.value)} placeholder="Add a short message…" autoComplete="off" className="bg-transparent dark:bg-transparent" />
+                              <Input id="memo" value={memo} onChange={event => setMemo(event.target.value)} placeholder="Add a short message…" autoComplete="off" className={`bg-transparent dark:bg-transparent ${embedded ? 'focus-visible:border-input focus-visible:ring-0' : ''}`} />
                               <p className={memoByteLength > 34 ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'}>{memoByteLength}/34 bytes · converted to hex automatically</p>
                             </div>
                           </AccordionContent>
@@ -580,8 +621,8 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                   </Button>
                 ) : (
                   <Button size="lg" type="submit" disabled={!canQuote || Boolean(busy)} className="h-18 w-full text-lg">
-                    {busy === 'quote' ? <Loader2 className="animate-spin" /> : <ArrowRight />}
-                    Request quote
+                    {busy === 'quote' || busy === 'submit' ? <Loader2 className="animate-spin" /> : <ArrowRight />}
+                    {busy === 'quote' ? 'Preparing approval…' : busy === 'submit' ? 'Waiting for wallet…' : 'Continue in wallet'}
                   </Button>
                 )}
               </form>
@@ -592,19 +633,6 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
 
         <Dialog open={transactionModalOpen} onOpenChange={setTransactionModalOpen}>
           <DialogContent className="max-h-[90vh] overflow-y-auto p-0 sm:max-w-xl" aria-describedby="transaction-modal-description">
-            {!sponsorship ? (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="absolute top-2 left-2 z-10"
-                onClick={resetForNewQuote}
-                disabled={Boolean(busy)}
-                aria-label="Back to transfer details"
-              >
-                <ArrowLeft />
-              </Button>
-            ) : null}
-
             {status?.status === 'success' ? (
               <div className="grid place-items-center gap-5 px-6 pt-16 pb-8 text-center">
                 <div className="grid size-20 place-items-center rounded-full bg-primary/15 text-primary ring-1 ring-primary/25">
@@ -625,16 +653,16 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
             ) : (
               <>
                 <DialogHeader className="border-b px-12 py-5 text-center sm:text-center">
-                  <DialogTitle className="text-lg">{sponsorship ? 'Transaction submitted' : 'Approve sponsored transaction'}</DialogTitle>
+                  <DialogTitle className="text-lg">Transaction submitted</DialogTitle>
                   <DialogDescription id="transaction-modal-description">
-                    {sponsorship ? 'Your signed transaction is being confirmed on Stacks testnet.' : 'Review the exact token movement before approving it in your wallet.'}
+                    Your signed transaction is being confirmed on Stacks testnet.
                   </DialogDescription>
                 </DialogHeader>
 
                 <div className="grid gap-5 px-5 py-2 sm:px-6">
                   <div className="flex items-center justify-between rounded-lg border bg-primary/5 px-4 py-3">
                     <div><p className="text-xs text-muted-foreground">Amount</p><p className="mt-1 font-mono text-xl font-semibold">{amountSats} sats</p></div>
-                    <Badge variant={sponsorship ? 'default' : 'secondary'}>{sponsorship ? provisionalStatus ? 'Rechecking status' : status?.status ?? 'Broadcast' : quoteRenewing ? 'Renewing quote' : 'Quote ready'}</Badge>
+                    <Badge>{provisionalStatus ? 'Rechecking status' : status?.status ?? 'Broadcast'}</Badge>
                   </div>
 
                   <dl className="grid gap-2 rounded-lg border bg-muted/30 p-4 text-sm">
@@ -647,29 +675,20 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                     <ReviewRow label="Transaction" valueNode={<TransactionId txid={txid} successful={false} />} />
                   </dl>
 
-                  {sponsorship ? (
-                    <div className="grid place-items-center gap-3 py-3 text-center">
-                      {failed ? <CircleAlert className="size-10 text-destructive" /> : <Loader2 className="size-10 animate-spin text-primary" />}
-                      <div>
-                        <p className="font-medium">{failed ? 'Transaction failed' : provisionalStatus ? 'Rechecking chain status' : 'Waiting for confirmation'}</p>
-                        {!provisionalStatus ? <p className="mt-1 text-xs text-muted-foreground">{describeChainStatus(status)}</p> : null}
-                      </div>
+                  <div className="grid place-items-center gap-3 py-3 text-center">
+                    {failed ? <CircleAlert className="size-10 text-destructive" /> : <Loader2 className="size-10 animate-spin text-primary" />}
+                    <div>
+                      <p className="font-medium">{failed ? 'Transaction failed' : provisionalStatus ? 'Rechecking chain status' : 'Waiting for confirmation'}</p>
+                      {!provisionalStatus ? <p className="mt-1 text-xs text-muted-foreground">{describeChainStatus(status)}</p> : null}
                     </div>
-                  ) : null}
+                  </div>
 
                   {error ? <ErrorAlert error={error} /> : null}
-                  {sponsorship && failed ? <TransactionOutcome status={status} txid={txid} failed amountSats={amountSats} sponsorFeeSats={quoteResponse?.quote.sponsorFee} origin={origin} /> : null}
+                  {failed ? <TransactionOutcome status={status} txid={txid} failed amountSats={amountSats} sponsorFeeSats={quoteResponse?.quote.sponsorFee} origin={origin} /> : null}
                 </div>
 
                 <DialogFooter className="m-0 px-5 py-4 sm:px-6">
-                  {sponsorship ? (
-                    <Button variant="outline" size="lg" className="w-full" onClick={resetForNewQuote} disabled={Boolean(busy)}><RefreshCw /> New transfer</Button>
-                  ) : (
-                    <Button size="lg" className="h-18 w-full text-lg" onClick={signAndSubmit} disabled={!canSubmit || Boolean(busy)}>
-                      {busy === 'submit' ? <Loader2 className="animate-spin" /> : <Send />}
-                      {busy === 'submit' ? 'Waiting for wallet…' : 'Approve in wallet'}
-                    </Button>
-                  )}
+                  <Button variant="outline" size="lg" className="w-full" onClick={resetForNewQuote} disabled={Boolean(busy)}><RefreshCw /> New transfer</Button>
                 </DialogFooter>
               </>
             )}

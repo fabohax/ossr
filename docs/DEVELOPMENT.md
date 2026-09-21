@@ -211,14 +211,13 @@ Accepts quote and sponsorship requests, applies rate limits, performs idempotenc
 Calculates a fee in the configured reimbursement asset. For the sBTC PoC:
 
 ```text
-sponsor fee sats =
-estimated STX network cost converted to sats
-+ operator margin
-+ volatility buffer
-+ failed-transaction reserve
+log fee sats = 2 × ceil(log2(1 + ceil(amount sats / 100)))
+cost floor sats = network cost + infrastructure + risk + minimum profit
+sponsor fee sats = max(log fee sats, cost floor sats, 1)
 ```
 
-For the PoC, the STX/BTC conversion source can be operator-configured. The quote response must reveal the pricing inputs or policy version used.
+The logarithmic scale and growth, STX/BTC conversion source, and cost inputs are
+operator-configurable. Relay metadata reveals the pricing model and parameters.
 
 #### D. Reimbursement asset adapter
 

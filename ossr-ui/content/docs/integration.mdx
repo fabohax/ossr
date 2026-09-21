@@ -1,0 +1,103 @@
+---
+title: Dapp integration
+description: Request a quote, build the sponsored call, ask the wallet to sign, and submit through a relay.
+---
+
+## Prerequisites
+
+- A compatible browser wallet such as Leather or Xverse
+- A trusted OSSR testnet relay base URL
+- `@stacks/connect` and `@stacks/transactions`
+- The reviewed OSSR adapter and canonical testnet sBTC contract principals
+
+## 1. Load relay metadata
+
+Fetch `/v1/info` and validate the relay ID, network, sponsor, adapter, sBTC contract, policy limits, and active quote key against trusted configuration.
+
+```ts title="relay-info.ts"
+const info = await fetch(`${relayUrl}/v1/info`).then((response) => response.json());
+
+if (info.network !== 'testnet') throw new Error('Unsupported network');
+if (info.adapterContract !== expectedAdapter) throw new Error('Unexpected adapter');
+if (info.sbtcContract !== expectedSbtcContract) throw new Error('Unexpected sBTC contract');
+if (!info.quotesEnabled || !info.sponsorshipsEnabled) {
+  throw new Error('Relay is not accepting requests');
+}
+```
+
+Do not accept an adapter or quote key merely because the relay advertises it. Compare metadata to a configured relay profile, registry record, or another trusted source.
+
+## 2. Request a quote
+
+```ts title="request-quote.ts"
+const response = await fetch(`${relayUrl}/v1/quotes`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    origin,
+    recipient,
+    amountSats: '1000',
+    maxSponsorFeeSats: '20',
+  }),
+});
+
+const signedQuote = await response.json();
+```
+
+Display the transfer amount, sponsor fee, maximum sBTC outflow, expiry height, and adapter before wallet approval. Verify the quote signature and ensure every signed field matches the request and trusted relay metadata.
+
+## 3. Ask the wallet to sign
+
+Build the exact `sponsored-transfer` contract call and an exact-deny fungible-token post-condition for `amount + sponsorFee`. Then request an origin signature without broadcasting:
+
+```ts title="sign.ts"
+const walletResult = await request('stx_callContract', {
+  contract: prepared.contract,
+  functionName: prepared.functionName,
+  functionArgs: prepared.functionArgs,
+  postConditions: prepared.postConditions,
+  postConditionMode: 'deny',
+  sponsored: true,
+  network: 'testnet',
+});
+```
+
+Extract the raw origin-signed bytes from the wallet result. The dapp must not broadcast them directly because the sponsor authorization is incomplete.
+
+## 4. Submit and track
+
+```ts title="submit.ts"
+const sponsorship = await fetch(`${relayUrl}/v1/sponsorships`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    quoteId: signedQuote.quote.quoteId,
+    transaction: rawTransaction,
+    user: origin,
+  }),
+}).then((response) => response.json());
+```
+
+Poll `GET /v1/sponsorships/{txid}` until `success` or a terminal failure. Use bounded backoff rather than rapid polling, and preserve the transaction ID so status can be restored after a page reload.
+
+## User experience states
+
+| State | Recommended UI |
+| --- | --- |
+| Loading metadata | “Checking relay” with no signing action enabled |
+| Quote ready | Exact amount, fee, maximum outflow, and expiry |
+| Wallet open | “Waiting for wallet” with duplicate actions disabled |
+| Broadcast | Transaction ID and explorer link |
+| Pending | Current chain status with background polling |
+| Confirmed | Recipient amount, sponsor fee, and block height |
+| Rejected or failed | Stable error title, technical code, and a concrete recovery action |
+
+## Security checklist
+
+- Never request or transmit wallet private keys or seed phrases.
+- Never sponsor an arbitrary contract call.
+- Verify the signed quote and every quote-bound transaction field.
+- Submit a transaction to only its quoted relay.
+- Treat quote IDs as single-use idempotency boundaries.
+- Rebuild and re-sign whenever a quote is renewed or the relay changes.
+- Keep origin and sponsor keys out of application logs and analytics.

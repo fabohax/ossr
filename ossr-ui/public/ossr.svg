@@ -3,5 +3,5 @@
     <rect width="292" height="292" fill="white" rx="79" />
     <circle cx="146" cy="146" r="51" fill="black" />
   </mask>
-  <rect width="292" height="292" fill="white" rx="79" mask="url(#ossr-cutout)" />
+  <rect width="292" height="292" fill="#6ee7b7" rx="79" mask="url(#ossr-cutout)" />
 </svg>

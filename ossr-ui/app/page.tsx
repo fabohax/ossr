@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { ArrowRight, Blocks, Check, ChevronRight, CircleDot, Code2, Github, ShieldCheck, Sparkles, TerminalSquare, Users, WalletCards } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { enableDarkStacksWalletSelector } from '@/lib/stacks-wallet-theme';
 import Dashboard from './dashboard/page';
 import styles from './page.module.css';
 
@@ -24,23 +25,81 @@ const principles = [
 const connectedAddressKey = 'ossr-ui:connected-stx-address';
 
 function compactAddress(address: string): string {
-  return address.length > 12 ? `${address.slice(0, 6)}…${address.slice(-4)}` : address;
+  return address.length > 10 ? `${address.slice(0, 5)}…${address.slice(-4)}` : address;
+}
+
+function stacksAddressFromResponse(response: unknown): string | undefined {
+  if (typeof response !== 'object' || response === null || Array.isArray(response)) return undefined;
+  const outer = response as Record<string, unknown>;
+  const result = typeof outer.result === 'object' && outer.result !== null && !Array.isArray(outer.result)
+    ? outer.result as Record<string, unknown>
+    : outer;
+  if (!Array.isArray(result.addresses)) return undefined;
+  const address = result.addresses.find(candidate => (
+    typeof candidate === 'object'
+    && candidate !== null
+    && (candidate as Record<string, unknown>).symbol === 'STX'
+    && typeof (candidate as Record<string, unknown>).address === 'string'
+  )) as Record<string, unknown> | undefined;
+  return address?.address as string | undefined;
 }
 
 export default function Home() {
   const [transferOpen, setTransferOpen] = useState(false);
   const [connectedAddress, setConnectedAddress] = useState('');
+  const [connectingWallet, setConnectingWallet] = useState(false);
 
   useEffect(() => {
     setConnectedAddress(window.localStorage.getItem(connectedAddressKey) ?? '');
   }, []);
 
+  async function disconnectWallet() {
+    const { disconnect } = await import('@stacks/connect');
+    disconnect();
+    window.localStorage.removeItem(connectedAddressKey);
+    setConnectedAddress('');
+    setTransferOpen(false);
+  }
+
+  async function handleWalletButton() {
+    if (connectedAddress) {
+      setTransferOpen(true);
+      return;
+    }
+    setConnectingWallet(true);
+    const stopWalletThemeObserver = enableDarkStacksWalletSelector();
+    try {
+      const { connect } = await import('@stacks/connect');
+      const response = await connect({ forceWalletSelect: true });
+      const address = stacksAddressFromResponse(response);
+      if (!address) return;
+      window.localStorage.setItem(connectedAddressKey, address);
+      setConnectedAddress(address);
+      setTransferOpen(true);
+    } catch {
+      // Closing or rejecting the wallet picker leaves the user disconnected.
+    } finally {
+      stopWalletThemeObserver();
+      setConnectingWallet(false);
+    }
+  }
+
   return <main className={styles.page}>
     <div className={styles.ambient} aria-hidden="true" />
     <header className={styles.header}>
       <Link href="/" className={styles.brand} aria-label="OSSR home"><span>OSSR</span></Link>
-      <nav className={styles.nav} aria-label="Primary navigation"><a href="#documentation">Documentation</a><a href="#operators">Operators</a><a href="#developers">Developers</a></nav>
-      <Button className={styles.connect} onClick={() => setTransferOpen(true)}>{connectedAddress ? compactAddress(connectedAddress) : 'Connect'} <ArrowRight /></Button>
+      <nav className={styles.nav} aria-label="Primary navigation"><Link href="/docs">DOCS</Link><Link href="/operators">OPERATORS</Link><Link href="/developers">DEVELOPERS</Link></nav>
+      <div className={styles.walletControls}>
+        {connectedAddress ? (
+          <Button variant="ghost" size="icon" className={styles.disconnect} onClick={() => void disconnectWallet()} aria-label="Disconnect wallet" title="Disconnect wallet">
+            <Image src="/sign-out.svg" alt="" width={19} height={19} />
+          </Button>
+        ) : null}
+        <Button className={`${styles.connect} ${connectedAddress ? styles.connected : styles.walletPrompt}`} onClick={() => void handleWalletButton()} disabled={connectingWallet}>
+          <Image src="/wallet.svg" alt="" width={18} height={18} className={styles.walletIcon} />
+          {connectedAddress ? compactAddress(connectedAddress) : connectingWallet ? 'Connecting…' : 'Connect Wallet'}
+        </Button>
+      </div>
     </header>
 
     <section className={styles.hero}>
@@ -50,7 +109,7 @@ export default function Home() {
         <p className={styles.lede}>OSSR is an open protocol for sponsored Stacks transactions. Users move sBTC without holding STX, while independent operators handle network fees.</p>
         <div className={styles.heroActions}>
           <Button asChild size="lg" className={styles.primary}><Link href="/dashboard">Open dashboard <ArrowRight /></Link></Button>
-          <Button asChild size="lg" variant="outline" className={styles.secondary}><a href="#documentation">Explore the protocol <ChevronRight /></a></Button>
+          <Button asChild size="lg" variant="outline" className={styles.secondary}><Link href="/docs">Explore the protocol <ChevronRight /></Link></Button>
         </div>
         <div className={styles.trust}><span><Check /> Non-custodial</span><span><Check /> Open source</span><span><Check /> Built for sBTC</span></div>
       </div>
@@ -58,7 +117,7 @@ export default function Home() {
         <div className={styles.glow} />
         <FlowNode className={styles.userNode} icon={<WalletCards />} label="USER WALLET" title="Sign intent" />
         <div className={styles.flow}><span /></div>
-        <div className={styles.core}><div className={styles.orbit}><i /><i /><i /></div><b>O</b><small>OSSR PROTOCOL</small><strong>Route + sponsor</strong></div>
+        <div className={styles.core}><div className={styles.orbit}><i /><i /><i /></div><Image className={styles.coreLogo} src="/ossr.svg" alt="" width={50} height={50} /><small>OSSR PROTOCOL</small><strong>Route + sponsor</strong></div>
         <div className={styles.flow}><span /></div>
         <FlowNode className={styles.chainNode} icon={<Blocks />} label="STACKS" title="Settle onchain" live />
         <div className={styles.chip}><ShieldCheck /> Atomic settlement</div>
@@ -80,12 +139,12 @@ export default function Home() {
     </section>
 
     <section className={styles.paths}>
-      <article id="operators" className={styles.path}><div className={styles.cardIcon}><Users /></div><span className={styles.kicker}>FOR OPERATORS</span><h2>Power the relay network.</h2><p>Run infrastructure, sponsor transactions, and help create a more accessible Stacks ecosystem.</p><a href="#documentation">Operator overview <ArrowRight /></a><div className={styles.terminal}><div><i/><i/><i/><span>operator</span></div><code><b>$</b> ossr-operator start</code><code><em>✓</em> connected to stacks-testnet</code><code><em>✓</em> relay ready for quotes</code></div></article>
-      <article id="developers" className={styles.path}><div className={styles.cardIcon}><Code2 /></div><span className={styles.kicker}>FOR DEVELOPERS</span><h2>Make gasless feel native.</h2><p>Integrate sponsored sBTC transfers with a small, predictable API designed for modern applications.</p><a href="#documentation">Read the docs <ArrowRight /></a><div className={styles.code}><div><TerminalSquare /><span>request.ts</span></div><pre><span>const</span> quote = <span>await</span> ossr.quote({'{'}{`\n  amount: 1000,\n  token: 'sBTC'\n`}{'}'});</pre></div></article>
+      <article id="operators" className={styles.path}><div className={styles.cardIcon}><Users /></div><span className={styles.kicker}>FOR OPERATORS</span><h2>Power the relay network.</h2><p>Run infrastructure, sponsor transactions, and help create a more accessible Stacks ecosystem.</p><Link href="/operators">Operator overview <ArrowRight /></Link><div className={styles.terminal}><div><i/><i/><i/><span>operator</span></div><code><b>$</b> ossr-operator start</code><code><em>✓</em> connected to stacks-testnet</code><code><em>✓</em> relay ready for quotes</code></div></article>
+      <article id="developers" className={styles.path}><div className={styles.cardIcon}><Code2 /></div><span className={styles.kicker}>FOR DEVELOPERS</span><h2>Make gasless feel native.</h2><p>Integrate sponsored sBTC transfers with a small, predictable API designed for modern applications.</p><Link href="/developers">Read the docs <ArrowRight /></Link><div className={styles.code}><div><TerminalSquare /><span>request.ts</span></div><pre><span>const</span> quote = <span>await</span> ossr.quote({'{'}{`\n  amount: 1000,\n  token: 'sBTC'\n`}{'}'});</pre></div></article>
     </section>
 
     <section className={styles.final}><span className={styles.kicker}>READY TO GET STARTED?</span><h2>The open relay layer for Stacks.</h2><p>Connect your wallet and experience sponsored transactions on testnet.</p><Button size="lg" className={styles.primary} onClick={() => setTransferOpen(true)}>Connect to OSSR <ArrowRight /></Button></section>
-    <footer className={styles.footer}><div className={styles.brand}><span>OSSR</span></div><p>Open Stacks Sponsor Relay. Built in the open.</p><div><a href="#documentation">Protocol</a><a href="#operators">Operators</a><a href="#developers">Developers</a><a href="https://github.com" aria-label="GitHub"><Github /></a></div></footer>
+    <footer className={styles.footer}><div className={styles.brand}><span>OSSR</span></div><p>Open Stacks Sponsor Relay. Built for the plebs.</p><div><Link href="/docs">Protocol</Link><Link href="/operators">Operators</Link><Link href="/developers">Developers</Link><a href="https://github.com/OSSR-protocol" aria-label="OSSR Protocol on GitHub"><Github /></a></div></footer>
 
     <Dialog open={transferOpen} onOpenChange={setTransferOpen}>
       <DialogContent className="w-[min(26.5rem,calc(100vw-1rem))] max-h-[calc(100vh-2rem)] max-w-none overflow-y-auto border-white/15 bg-background/65 p-0 shadow-2xl backdrop-blur-2xl sm:max-w-none">

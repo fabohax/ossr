@@ -72,6 +72,11 @@ export type RelayApiConfig = {
   minimumProfitSats?: bigint;
   pricingApiUrl?: string;
   pricingCacheMs?: number;
+  /** Transfer-size divisor used by the default logarithmic fee curve. */
+  pricingScaleSats?: bigint;
+  /** Sats charged for each doubling on the default logarithmic fee curve. */
+  pricingGrowthSats?: bigint;
+  /** Optional fixed-fee override for operators that do not use the curve. */
   sponsorFeeSats?: bigint;
   corsAllowedOrigins?: string[];
   /** Stacks Core RPC base URL exposing authenticated /v3 transaction simulation. */
@@ -287,12 +292,14 @@ export class OssrRelayApi {
         maxNetworkFeeMicroStx: this.maximumFeeMicroStx.toString(),
         quoteLifetimeBlocks: this.quoteLifetimeBlocks().toString(),
         sponsorFeeSats: this.config.sponsorFeeSats?.toString(),
-        sponsorFeeBps: this.config.sponsorFeeSats === undefined ? '100' : undefined,
+        pricingModel: this.config.sponsorFeeSats === undefined ? 'log2' : 'fixed',
+        pricingScaleSats: this.config.sponsorFeeSats === undefined ? this.pricingScaleSats().toString() : undefined,
+        pricingGrowthSats: this.config.sponsorFeeSats === undefined ? this.pricingGrowthSats().toString() : undefined,
         minimumSponsorFeeSats: '1',
         breakEvenFeeSats: (dynamicPricing?.floorSats ?? this.breakEvenFeeSats()).toString(),
         pricingPolicy: this.config.dynamicPricing
-          ? 'max(percentage-or-fixed,network-cost+infrastructure+risk+minimum-profit,1)'
-          : 'max(percentage-or-fixed,break-even,1)',
+          ? 'max(fixed-or-log2,network-cost+infrastructure+risk+minimum-profit,1)'
+          : 'max(fixed-or-log2,break-even,1)',
         dynamicPricing: this.config.dynamicPricing ?? false,
         estimatedNetworkFeeMicroStx: dynamicPricing?.networkFeeMicroStx.toString(),
         estimatedNetworkCostSats: dynamicPricing?.networkCostSats.toString(),
@@ -562,13 +569,25 @@ export class OssrRelayApi {
 
   private async sponsorFeeSats(amountSats: bigint): Promise<bigint> {
     const configured = this.config.sponsorFeeSats;
-    const requestedFee = configured ?? (amountSats + 99n) / 100n;
+    const requestedFee = configured ?? this.pricingGrowthSats() * ceilLog2(1n + ceilDiv(amountSats, this.pricingScaleSats()));
     const costFloor = this.config.dynamicPricing
       ? (await this.dynamicCostFloor()).floorSats
       : this.breakEvenFeeSats();
     // A quote cannot underpay the operator: the signed fee covers at least the
     // configured all-in cost, even for transfers smaller than that cost.
     return maxBigInt(1n, requestedFee, costFloor);
+  }
+
+  private pricingScaleSats(): bigint {
+    const value = this.config.pricingScaleSats ?? 100n;
+    if (value < 1n) throw new RelayError(503, 'PRICING_POLICY_INVALID', 'Logarithmic pricing scale must be positive.');
+    return value;
+  }
+
+  private pricingGrowthSats(): bigint {
+    const value = this.config.pricingGrowthSats ?? 2n;
+    if (value < 1n) throw new RelayError(503, 'PRICING_POLICY_INVALID', 'Logarithmic pricing growth must be positive.');
+    return value;
   }
 
   private async dynamicCostFloor(): Promise<{ floorSats: bigint; networkFeeMicroStx: bigint; networkCostSats: bigint }> {
@@ -642,6 +661,17 @@ function maxBigInt(...values: bigint[]): bigint {
 
 function ceilDiv(numerator: bigint, denominator: bigint): bigint {
   return (numerator + denominator - 1n) / denominator;
+}
+
+function ceilLog2(value: bigint): bigint {
+  if (value <= 1n) return 0n;
+  let exponent = 0n;
+  let power = 1n;
+  while (power < value) {
+    power <<= 1n;
+    exponent += 1n;
+  }
+  return exponent;
 }
 
 function positivePriceScale(value: unknown, symbol: string): bigint {

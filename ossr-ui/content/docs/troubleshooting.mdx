@@ -1,0 +1,54 @@
+---
+title: Troubleshooting
+description: Diagnose relay, wallet, quote, simulation, and chain-status failures.
+---
+
+## Operator unavailable
+
+`OPERATOR_UNAVAILABLE` means the relay intentionally refused to sign because a readiness check failed. Inspect:
+
+```bash
+curl -fsS http://127.0.0.1:3002/health/live
+curl -i http://127.0.0.1:3002/health/ready
+```
+
+Common causes are insufficient sponsor STX, an unreachable Stacks API, or upstream HTTP `429` rate limiting. Liveness can remain healthy while readiness returns `503`.
+
+## Quote rejected
+
+| Code | Meaning | Action |
+| --- | --- | --- |
+| `QUOTE_EXPIRED` | Chain height passed the signed expiry | Request a fresh quote and rebuild the transaction |
+| `QUOTE_ALREADY_USED` | Quote ID already completed | Start a new transfer |
+| `QUOTE_ORIGIN_MISMATCH` | Connected wallet differs from quote origin | Reconnect the original wallet or request a new quote |
+| `SPONSOR_FEE_TOO_HIGH` | Quote exceeds the user's configured cap | Increase the cap deliberately or wait for pricing to change |
+| `QUOTE_TRANSACTION_MISMATCH` | Signed bytes do not match quoted intent | Rebuild from the exact returned quote |
+
+## Wallet signing failed
+
+- Confirm the wallet is on Stacks testnet.
+- Confirm it supports sponsored `stx_callContract` requests that return raw signed bytes without broadcasting.
+- Reject stale wallet prompts before retrying.
+- Do not change recipient, amount, memo, quote, or post-conditions after requesting approval.
+
+## Simulation failed
+
+`SIMULATION_FAILED` means the completed sponsored transaction would not return a successful adapter result. Check the user's sBTC balance, recipient, adapter and token principals, amount plus sponsor fee, expiry, and exact post-condition.
+
+`SIMULATION_UNAVAILABLE`, `SIMULATION_STALE`, or `SIMULATION_INVALID_RESPONSE` indicates the relay could not obtain trustworthy simulation evidence. Operators should inspect their Stacks Core RPC version, authorization token, connectivity, and sync height.
+
+## Chain execution failed
+
+| Status or adapter error | Likely cause |
+| --- | --- |
+| `abort_by_post_condition` | Signed asset constraint did not match actual movement |
+| `ERR_FEE_TRANSFER_FAILED (u109)` | Origin could not reimburse the sponsor |
+| `ERR_RECIPIENT_TRANSFER_FAILED (u110)` | Origin could not pay the recipient |
+| `dropped_replace_by_fee` | Transaction was superseded by another sponsor-nonce transaction |
+| `not_found` | Indexer has not observed the broadcast or propagation is ambiguous |
+
+Treat `not_found` and replacement observations as provisional until repeated status checks confirm a terminal outcome.
+
+## Browser cannot reach relay
+
+For LAN development, bind the relay to `0.0.0.0`, expose port `3002`, and include the interface origin in `OSSR_CORS_ALLOWED_ORIGINS`. Public relays must use HTTPS and explicit CORS origins.

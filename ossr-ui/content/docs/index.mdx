@@ -1,0 +1,51 @@
+---
+title: Open Stacks Sponsor Relay
+description: A testnet protocol for sponsored sBTC transfers on Stacks.
+---
+
+OSSR lets a user send sBTC without holding STX. The user authorizes one exact token movement, while an independent relay supplies the STX network fee, adds the sponsor authorization, and broadcasts the completed transaction.
+
+OSSR is an application-layer fee abstraction, not a change to Stacks consensus. STX remains the network fee asset. The relay temporarily supplies STX and receives the quoted reimbursement in sBTC inside the same adapter transaction.
+
+## Why OSSR exists
+
+Sponsored authorization already exists in Stacks, but every application otherwise needs to operate its own sponsor, fee policy, signing system, monitoring, and transaction validation. OSSR defines a reusable boundary between wallets and independent relay operators:
+
+- wallets keep control of user keys and sign only exact intent;
+- relays compete on policy, price, availability, and capacity;
+- the adapter makes the recipient payment and relay reimbursement atomic; and
+- applications integrate one narrow protocol instead of maintaining sponsor infrastructure.
+
+## How it works
+
+1. A dapp loads trusted relay metadata from `GET /v1/info`.
+2. The dapp requests a signed quote for an exact transfer.
+3. The wallet signs the allowlisted adapter call as the transaction origin.
+4. The quoted relay validates, simulates, sponsors, and broadcasts it.
+5. The dapp polls the relay until the transaction reaches a terminal status.
+
+## Version 1 scope
+
+| Property | Value |
+| --- | --- |
+| Network | Stacks testnet |
+| Action | Sponsored sBTC transfer |
+| Network fee | Paid by the relay in STX |
+| Relay reimbursement | Paid atomically in sBTC sats |
+| User custody | Non-custodial |
+| Relay selection | Application or user configured |
+| Transaction target | Allowlisted OSSR adapter only |
+| Quote validity | Short-lived and single-use |
+
+> OSSR is a prototype. Do not use mainnet funds, and do not treat a registered relay as trusted without independently validating its metadata, quote, and transaction.
+
+## Choose a path
+
+- [Understand the architecture](/docs/architecture)
+- [Integrate OSSR into a dapp](/docs/integration)
+- [Understand quote and transaction states](/docs/quote-lifecycle)
+- [Review the relay HTTP API](/docs/relay-api)
+- [Review the security model](/docs/security)
+- [Prepare to operate a relay](/docs/operators)
+- [Run the verification suite](/docs/testing)
+- [Troubleshoot common failures](/docs/troubleshooting)

@@ -104,6 +104,8 @@ async function main(): Promise<void> {
       minimumProfitSats: BigInt(process.env.SBTC_MINIMUM_PROFIT_SATS ?? '1'),
       pricingApiUrl: process.env.SBTC_PRICING_API_URL?.trim(),
       pricingCacheMs: Number(process.env.SBTC_PRICING_CACHE_SECONDS ?? '60') * 1_000,
+      pricingScaleSats: BigInt(process.env.SBTC_LOG_SCALE_SATS ?? '100'),
+      pricingGrowthSats: BigInt(process.env.SBTC_LOG_GROWTH_SATS ?? '2'),
       sponsorFeeSats: process.env.SBTC_SPONSOR_FEE_SATS
         ? BigInt(process.env.SBTC_SPONSOR_FEE_SATS)
         : undefined,

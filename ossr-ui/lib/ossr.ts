@@ -23,6 +23,10 @@ export type RelayInfo = {
     maxNetworkFeeMicroStx: string;
     quoteLifetimeBlocks: string;
     sponsorFeeSats?: string;
+    pricingModel?: 'fixed' | 'log2' | string;
+    pricingScaleSats?: string;
+    pricingGrowthSats?: string;
+    /** Legacy percentage relays remain supported by the client. */
     sponsorFeeBps?: string;
     minimumSponsorFeeSats?: string;
     breakEvenFeeSats?: string;

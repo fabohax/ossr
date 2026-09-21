@@ -1,0 +1,46 @@
+---
+title: Quote lifecycle
+description: How an OSSR offer is created, bound, consumed, renewed, and reconciled.
+---
+
+A quote is a signed, short-lived offer from one relay for one exact origin intent. It is not a bearer voucher for arbitrary sponsorship.
+
+## Bound fields
+
+The signed quote binds at least:
+
+- protocol version, network, action, and reimbursement asset;
+- relay ID, sponsor principal, quote key ID, and policy version;
+- origin, recipient, amount, sponsor fee, and maximum STX network fee;
+- adapter contract, function, argument hash, quote ID, and expiry height.
+
+Clients verify the quote key against trusted `/v1/info` metadata. A valid signature proves that the matching key signed the offer; it does not prove the relay is trustworthy or the price is acceptable.
+
+## State progression
+
+| State | Meaning |
+| --- | --- |
+| Issued | Quote is persisted and returned to the client |
+| Reserved | Matching transaction bytes atomically claimed the quote ID |
+| Processing | Sponsor signing or broadcast is in progress |
+| Completed | Broadcast result is durably associated with the quote |
+| Expired | Chain height exceeded the signed expiry |
+| Ambiguous | Broadcast transport failed and reconciliation is required |
+
+## Expiry and renewal
+
+The wallet must sign while the quote remains valid. When a quote expires before submission, request a fresh quote and rebuild the transaction because the quote ID, expiry, fee, and argument hash can change. Never attach a new quote ID to transaction bytes signed for an older quote.
+
+## Idempotency
+
+The quote ID is the sponsorship idempotency key:
+
+- the first matching submission reserves it;
+- an exact retry after completion returns the stored result;
+- different transaction bytes receive an idempotency mismatch;
+- simultaneous matching submissions receive an in-progress response; and
+- consumed or expired quotes cannot sponsor a different transaction.
+
+## Changing relays
+
+Quotes are bound to one relay and sponsor. If an application falls back to another relay, it must obtain a new quote, rebuild the adapter call, and ask the wallet to sign a replacement transaction. Do not submit both versions concurrently.

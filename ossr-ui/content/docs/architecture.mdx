@@ -1,0 +1,56 @@
+---
+title: Architecture
+description: Components, trust boundaries, and the atomic sponsored-transfer path.
+---
+
+OSSR separates user intent, relay policy, sponsor signing, and on-chain settlement into narrow components. Each component validates the fields it is responsible for instead of trusting another layer.
+
+## Components
+
+| Component | Responsibility | Must never receive |
+| --- | --- | --- |
+| Dapp | Relay selection, quote display, transaction construction, status UX | Sponsor or quote private keys |
+| Browser wallet | Protect the origin key and approve the exact adapter call | Sponsor private key |
+| Relay API | Quote policy, transaction validation, simulation, sponsorship, broadcast | User private key or seed phrase |
+| Sponsor signer | Add only the sponsor authorization after validation | Arbitrary unvalidated transactions |
+| Adapter contract | Atomically transfer sBTC to recipient and relay | Off-chain secrets |
+| Registry | Publish operator discovery records and capabilities | User transactions or wallet credentials |
+
+## Transaction path
+
+```text
+Dapp              Wallet              Relay                 Stacks
+  | request quote   |                   |                      |
+  |------------------------------------>|                      |
+  | signed quote    |                   |                      |
+  |<------------------------------------|                      |
+  | build exact call|                   |                      |
+  |---------------->|                   |                      |
+  | origin-signed bytes                 |                      |
+  |<----------------|                   |                      |
+  | submit quote + transaction          |                      |
+  |------------------------------------>| validate + simulate  |
+  |                                     | sponsor + broadcast  |
+  |                                     |--------------------->|
+  | transaction ID                      |                      |
+  |<------------------------------------|                      |
+```
+
+The relay broadcasts the completed transaction itself. It does not return completed sponsored bytes for the client to hold or rebroadcast.
+
+## Atomic settlement
+
+The adapter call receives the transfer amount, recipient, sponsor fee, quote ID, expiry height, and optional memo. On success it performs both token movements:
+
+1. `amountSats` from the origin to the recipient;
+2. `sponsorFee` from the origin to the sponsor.
+
+If either transfer fails, the adapter returns an error and the transaction does not partially settle. The user's exact-deny post-condition independently limits total sBTC outflow to `amountSats + sponsorFee`.
+
+## Trust model
+
+A relay can refuse service, return an unattractive price, or become unavailable. It cannot change the origin-signed call, exceed the post-condition, spend unrelated assets, or obtain the user's private key. Applications should support clear failure handling and, in a future multi-relay network, safe fallback to a newly quoted and newly signed transaction.
+
+## Testnet boundary
+
+Version 1 accepts only Stacks testnet sponsored transactions and one reviewed sBTC adapter profile. Mainnet, arbitrary SIP-010 tokens, arbitrary contract calls, and cross-relay replay coordination are outside the current scope.

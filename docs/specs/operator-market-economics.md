@@ -13,7 +13,7 @@
 
 OSSR should make sponsored transactions attractive to users without requiring
 operators to accept unlimited negative-margin work. This proposal combines a
-simple user-facing percentage fee with cost-aware operator policy,
+slow-growing user-facing logarithmic fee with cost-aware operator policy,
 reputation-weighted routing, and explicitly funded subsidies.
 
 The intended outcome is a competitive market in which:
@@ -62,18 +62,19 @@ negative margin × more transactions = larger aggregate loss
 Reputation therefore has economic value only when it results in profitable
 traffic, permits a reliability premium, or earns an explicit external reward.
 
-## 3. User-facing percentage target
+## 3. User-facing logarithmic target
 
-The proposed default user-facing target is one percent of the transfer amount,
-rounded upward to whole sats with a minimum of one sat:
+The default curve grows by two sats whenever the scaled transfer size doubles:
 
 ```text
-percentage_fee_sats = max(1, ceil(transfer_amount_sats × 0.01))
+scaled_units = ceil(transfer_amount_sats / 100)
+log_fee_sats = 2 × ceil(log2(1 + scaled_units))
 ```
 
-One percent is easy to explain and remains proportionate for larger transfers.
-It is not, by itself, a guarantee that the operator recovers its cost on small
-transfers.
+The base-2 curve is deterministic and integer-only. It charges 2 sats at 100
+sats, 8 at 1,000, 14 at 10,000, 20 at 100,000, 28 at 1,000,000, and 40 at
+100,000,000 sats. It deliberately becomes a smaller percentage as transfers
+grow. It is not, by itself, a guarantee that an operator recovers its costs.
 
 ## 4. Sustainable quote formula
 
@@ -87,7 +88,7 @@ cost_floor_sats = ceil(
 )
 
 quoted_fee_sats = max(
-  percentage_fee_sats,
+  log_fee_sats,
   cost_floor_sats
 )
 ```
@@ -97,7 +98,7 @@ An operator targeting a margin may instead use:
 ```text
 margin_floor_sats = ceil(total_cost_sats / (1 - target_margin))
 
-quoted_fee_sats = max(percentage_fee_sats, margin_floor_sats)
+quoted_fee_sats = max(log_fee_sats, margin_floor_sats)
 ```
 
 For example, a 20% target margin divides total cost by `0.80` before rounding.
@@ -106,8 +107,17 @@ The quote MUST still respect the user's `maxSponsorFeeSats` limit.
 The relay implements the zero-profit floor as `SBTC_BREAK_EVEN_FEE_SATS`:
 
 ```text
-quoted_fee_sats = max(1, ceil(amount_sats / 100), break_even_fee_sats)
+quoted_fee_sats = max(
+  1,
+  2 × ceil(log2(1 + ceil(amount_sats / 100))),
+  break_even_fee_sats
+)
 ```
+
+Operators can tune the curve with `SBTC_LOG_SCALE_SATS` and
+`SBTC_LOG_GROWTH_SATS`, or opt into a fixed fee with
+`SBTC_SPONSOR_FEE_SATS`. Relays advertise the active model and parameters in
+`GET /v1/info` so clients can reproduce fee previews and MAX calculations.
 
 The operator MUST update this input when its estimated network, infrastructure,
 conversion, or risk cost changes. If the resulting quote exceeds the wallet's
@@ -121,13 +131,13 @@ Operators and applications MAY expose one or more of these modes.
 
 ### 5.1 Market mode
 
-The user pays the greater of the percentage fee and the operator's cost or
+The user pays the greater of the logarithmic fee and the operator's cost or
 margin floor. This is the sustainable default when no third party funds the
 difference.
 
 ### 5.2 Growth mode
 
-The user pays the percentage fee while the operator intentionally absorbs any
+The user pays the logarithmic fee while the operator intentionally absorbs any
 shortfall to acquire users, establish performance history, or enter a market.
 
 Growth mode MUST have explicit limits, such as:

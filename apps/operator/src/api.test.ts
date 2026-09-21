@@ -102,7 +102,7 @@ try {
   });
   const quote = quoteResponse.quote;
 
-  const percentageRelay = new OssrRelayApi({
+  const logarithmicRelay = new OssrRelayApi({
     operator,
     quotePrivateKey: randomPrivateKey(),
     adapterContractAddress: adapterAddress,
@@ -110,12 +110,23 @@ try {
     sbtcContractAddress: sbtcAddress,
     sbtcContractName: 'sbtc-token',
   });
-  const oneSatQuote = await percentageRelay.quote({ origin, recipient, amountSats: '1', maxSponsorFeeSats: '1' });
-  const exactPercentQuote = await percentageRelay.quote({ origin, recipient, amountSats: '100', maxSponsorFeeSats: '1' });
-  const roundedPercentQuote = await percentageRelay.quote({ origin, recipient, amountSats: '101', maxSponsorFeeSats: '2' });
-  assert.equal(oneSatQuote.quote.sponsorFee, '1', 'the percentage fee must never be zero');
-  assert.equal(exactPercentQuote.quote.sponsorFee, '1', '100 sats should quote a 1 sat fee');
-  assert.equal(roundedPercentQuote.quote.sponsorFee, '2', 'fractional sats should round up');
+  const logarithmicCases = [
+    ['1', '2'],
+    ['100', '2'],
+    ['1000', '8'],
+    ['10000', '14'],
+    ['100000', '20'],
+    ['1000000', '28'],
+    ['100000000', '40'],
+  ] as const;
+  for (const [amountSats, expectedFee] of logarithmicCases) {
+    const logarithmicQuote = await logarithmicRelay.quote({ origin, recipient, amountSats, maxSponsorFeeSats: expectedFee });
+    assert.equal(logarithmicQuote.quote.sponsorFee, expectedFee, `${amountSats} sats should follow the logarithmic curve`);
+  }
+  const logarithmicInfo = await logarithmicRelay.info() as { limits: Record<string, string> };
+  assert.equal(logarithmicInfo.limits.pricingModel, 'log2');
+  assert.equal(logarithmicInfo.limits.pricingScaleSats, '100');
+  assert.equal(logarithmicInfo.limits.pricingGrowthSats, '2');
 
   const breakEvenRelay = new OssrRelayApi({
     operator,
@@ -127,9 +138,9 @@ try {
     breakEvenFeeSats: 7n,
   });
   const tinyBreakEvenQuote = await breakEvenRelay.quote({ origin, recipient, amountSats: '1', maxSponsorFeeSats: '7' });
-  const largeBreakEvenQuote = await breakEvenRelay.quote({ origin, recipient, amountSats: '1000', maxSponsorFeeSats: '10' });
+  const largeBreakEvenQuote = await breakEvenRelay.quote({ origin, recipient, amountSats: '1000', maxSponsorFeeSats: '8' });
   assert.equal(tinyBreakEvenQuote.quote.sponsorFee, '7', 'small transfers must cover the operator cost floor');
-  assert.equal(largeBreakEvenQuote.quote.sponsorFee, '10', 'the percentage fee applies above the cost floor');
+  assert.equal(largeBreakEvenQuote.quote.sponsorFee, '8', 'the logarithmic fee applies above the cost floor');
   await assertRelayRejection(
     breakEvenRelay.quote({ origin, recipient, amountSats: '1', maxSponsorFeeSats: '6' }),
     422,

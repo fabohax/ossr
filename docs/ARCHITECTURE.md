@@ -183,16 +183,18 @@ type Quote = {
 
 The signature is computed over a domain-separated, canonical encoding of every field except `signature`. JSON object serialization is not used directly as signature input. Including the reimbursement asset prevents a quote for one token from being interpreted as a quote for another.
 
-For the PoC, the fee calculator may use:
+The default fee calculator uses a logarithmic transfer-size curve with a
+cost-aware floor:
 
 ```text
-sponsorFeeSats =
-  estimated network cost in sats
-  + configured failure reserve
-  + configured service margin
+logFeeSats = 2 × ceil(log2(1 + ceil(amountSats / 100)))
+costFloorSats = network cost + infrastructure + risk + minimum profit
+sponsorFeeSats = max(logFeeSats, costFloorSats, 1)
 ```
 
-The STX/sats conversion source and margins are operator configuration. A fixed testnet rate is acceptable for deterministic demonstrations and must be exposed in relay metadata or logs.
+The scale and growth constants, STX/sats conversion source, and margins are
+operator configuration and are exposed in relay metadata. Operators may use an
+explicit fixed-fee override.
 
 ### 4.4 Asset adapter boundary
 

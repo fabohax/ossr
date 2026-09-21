@@ -1,0 +1,90 @@
+---
+title: Operator registration
+description: Run a relay today and prepare for permissionless registry activation.
+---
+
+## Current status
+
+The operator registry specification is draft. The final Clarity ABI and deployed contract are not live yet. Operators can run and harden testnet relays now, then register after the contract address and parameters are published.
+
+## Run the relay
+
+Configure dedicated sponsor and quote-signing keys, the approved adapter and sBTC contracts, a Stacks API, and a Stacks Core simulation endpoint.
+
+Minimum operational inputs include:
+
+| Input | Purpose |
+| --- | --- |
+| `SPONSOR_PRIVATE_KEY` | Adds sponsor authorization and pays STX fees |
+| `QUOTE_PRIVATE_KEY` | Signs short-lived relay offers |
+| `STACKS_API_URL` | Balance, fee, nonce, and transaction status access |
+| `STACKS_SIMULATION_API_URL` | Pre-sign execution simulation |
+| Adapter and sBTC principals | Exact allowlist and asset binding |
+| CORS origins | Explicit browser clients permitted to call the relay |
+| `SBTC_LOG_SCALE_SATS` | Transfer-size divisor for logarithmic pricing; defaults to `100` |
+| `SBTC_LOG_GROWTH_SATS` | Sats added per doubling; defaults to `2` |
+
+Unless `SBTC_SPONSOR_FEE_SATS` sets a fixed override, the relay quotes
+`2 × ceil(log2(1 + ceil(amount / 100)))`, then raises that result to the live
+operator cost floor when necessary. The active model, curve parameters, and
+cost floor are published by `/v1/info` for accurate wallet previews.
+
+```bash
+npm run operator:serve
+```
+
+Verify the public identity and readiness surfaces:
+
+```bash
+curl -fsS https://relay.example/v1/info
+curl -fsS https://relay.example/health/ready
+```
+
+Monitor readiness, rejected requests, successful broadcasts, confirmation latency, STX spent, and sBTC reimbursed. Treat persistent `429`, stale simulation, sponsor nonce ambiguity, or low-balance events as operational incidents.
+
+## Registration record
+
+The version 1 registry is designed to record:
+
+- owner principal and quote public key;
+- locked STX collateral and lifecycle status;
+- metadata URI and verified content hash;
+- supported protocol versions and capabilities;
+- advertised pricing and sponsorship capacity; and
+- latest owner-authorized heartbeat height.
+
+Registration is permissionless, but activation requires valid fields, compatible capabilities, sufficient collateral, and current metadata. Registration is discovery—not endorsement—and clients must continue to validate every relay and signed quote.
+
+## Lifecycle
+
+| State | Discoverable | Meaning |
+| --- | --- | --- |
+| `pending` | No | Record exists but activation requirements are incomplete |
+| `active` | Yes | Eligible for wallet discovery |
+| `inactive` | No | Owner deactivated it or heartbeat became stale |
+| `withdrawing` | No | Collateral withdrawal delay is running |
+| `closed` | No | Collateral returned and record cannot reactivate |
+
+An active operator periodically submits owner-authorized heartbeats. The contract uses the current chain height rather than accepting a caller-supplied timestamp. The recommended initial staleness window is 500 blocks, though deployed parameters are authoritative.
+
+## Metadata document
+
+```json title="operator-metadata.json"
+{
+  "schema_version": "1",
+  "operator_id": "18",
+  "name": "Example OSSR Operator",
+  "api_url": "https://relay.example",
+  "region": "us-east",
+  "description": "Independent OSSR relay operator",
+  "website": "https://relay.example"
+}
+```
+
+Host metadata over HTTPS or content-addressed storage and register its exact hash. Clients treat it as untrusted display data even after hash verification.
+
+## Withdrawal
+
+Requesting withdrawal immediately makes the operator non-discoverable. Collateral remains locked through the configured delay—approximately seven days is recommended—before the owner can finalize and permanently close the record. Version 1 does not define slashing.
+
+See the full [operator guide](/operators) for the infrastructure and lifecycle checklist.

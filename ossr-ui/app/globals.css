@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "fumadocs-ui/css/shadcn.css";
+@import "fumadocs-ui/css/preset.css";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
@@ -38,6 +40,10 @@
   --sidebar-accent-foreground: var(--accent-foreground);
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
+  --fd-layout-width: 1280px;
+  --fd-sidebar-width: 220px;
+  --fd-toc-width: 200px;
+  --fd-page-width: 720px;
 }
 
 * {

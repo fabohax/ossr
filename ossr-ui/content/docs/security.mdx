@@ -1,0 +1,47 @@
+---
+title: Security model
+description: Validation layers, key boundaries, post-conditions, and failure assumptions.
+---
+
+OSSR assumes public relays receive adversarial traffic. Safety comes from overlapping checks at the wallet, client, relay, signer, adapter, and Stacks execution layers.
+
+## Core invariants
+
+1. The user signs only a sponsored testnet contract call to the configured adapter.
+2. The relay cannot alter the origin authorization after the wallet signs it.
+3. The transaction contains exactly one sBTC post-condition with deny mode and exact outflow.
+4. The relay signs only after quote, payload, fee, origin, simulation, and policy validation pass.
+5. Completed bytes are broadcast by the relay and never returned to clients.
+6. Quote IDs are durable, single-use idempotency keys.
+
+## Key separation
+
+| Key | Purpose | Recommended handling |
+| --- | --- | --- |
+| Origin key | Authorizes the user's adapter call | Browser wallet only |
+| Sponsor key | Pays STX and completes sponsored authorization | Isolated relay signer |
+| Quote key | Signs relay offers | Separate from sponsor key and independently rotatable |
+| Registry owner key | Manages operator record and collateral | Cold or governance-controlled account |
+
+Never log private keys, seed phrases, complete unsigned user intent containing secrets, or authentication tokens. Public keys, principals, quote IDs, transaction IDs, and policy versions are safe diagnostic identifiers.
+
+## Relay validation order
+
+Before sponsor signing, the relay checks:
+
+- request size, encoding, network, and sponsored authorization type;
+- origin signature and claimed user principal;
+- stored quote signature, expiry, status, and exact intent binding;
+- adapter principal, function name, arguments, and memo bounds;
+- exact-deny sBTC post-condition and maximum total outflow;
+- sponsor STX balance and configured maximum fee;
+- current nonce state and durable quote reservation; and
+- a fresh Stacks Core simulation with matching transaction ID and successful result.
+
+## What remains possible
+
+A malicious relay can censor a user, refuse a valid request, withhold status, advertise stale metadata, or quote an unfavorable fee. Applications mitigate this with trusted metadata, explicit fee display, timeouts, observable errors, and safe relay fallback. Cryptography cannot force a relay to provide service.
+
+## Production warning
+
+The current deployment target is a grant-reviewable testnet proof of concept. Mainnet operation requires a completed security review, finalized registry contract and ABI, hardened key custody, rate limiting, monitoring, incident procedures, and reviewed deployment values.

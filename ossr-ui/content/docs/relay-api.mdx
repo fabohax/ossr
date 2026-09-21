@@ -1,0 +1,108 @@
+---
+title: Relay HTTP API
+description: The narrow version 1 interface implemented by OSSR testnet relays.
+---
+
+The API uses JSON over HTTPS. Plain HTTP is acceptable only for loopback or isolated development environments.
+
+The base URL has no trailing slash. Requests and responses use JSON with lower-camel-case fields. Protocol integers are decimal strings so JavaScript clients never lose precision.
+
+## Endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/v1/info` | Relay identity, contracts, limits, and quote keys |
+| `POST` | `/v1/quotes` | Create a signed, expiring quote |
+| `POST` | `/v1/sponsorships` | Validate, sponsor, and broadcast |
+| `GET` | `/v1/sponsorships/{txid}` | Return relay and observed chain status |
+| `GET` | `/health/live` | Process liveness |
+| `GET` | `/health/ready` | Dependency and signer readiness |
+
+## Relay metadata
+
+`GET /v1/info` publishes the values a client needs before requesting a quote:
+
+```json title="GET /v1/info"
+{
+  "apiVersion": "1",
+  "relayId": "example-relay",
+  "network": "testnet",
+  "sponsorPrincipal": "ST...",
+  "supportedActions": ["sbtc-transfer"],
+  "adapterContract": "ST....sbtc-sponsored-transfer-v1",
+  "sbtcContract": "SN....sbtc-token",
+  "quoteKeys": [
+    { "keyId": "quote-2026-01", "publicKey": "0x...", "status": "active" }
+  ],
+  "quotesEnabled": true,
+  "sponsorshipsEnabled": true
+}
+```
+
+Clients should tolerate new optional properties but fail closed on unknown protocol versions, networks, actions, reimbursement assets, or security-sensitive values.
+
+## Quote request
+
+```json title="POST /v1/quotes"
+{
+  "origin": "ST...",
+  "recipient": "ST...",
+  "amountSats": "1000",
+  "maxSponsorFeeSats": "20"
+}
+```
+
+All protocol integers are unsigned decimal strings. Addresses must be canonical testnet standard principals.
+
+The response contains the signed quote, signing hash, signature, and quote public key. Clients resolve the quote's key ID against trusted metadata and validate the exact origin intent before constructing a transaction.
+
+## Sponsorship request
+
+```json title="POST /v1/sponsorships"
+{
+  "quoteId": "0x...",
+  "transaction": "0x...",
+  "user": "ST..."
+}
+```
+
+The relay validates the quote, origin signature, post-conditions, adapter arguments, fee policy, and simulation result before it adds the sponsor authorization and broadcasts.
+
+A successful response returns the broadcast status, operator principal, transaction ID, and STX network fee. The completed sponsored transaction bytes are intentionally not returned.
+
+## Status response
+
+`GET /v1/sponsorships/{txid}` combines relay state with the latest observed Stacks chain status. Clients should preserve unknown non-terminal fields for diagnostics and treat repeated `not_found` or replacement observations cautiously before declaring failure.
+
+## Transport behavior
+
+- Public relays use HTTPS with normal certificate validation.
+- Browser relays use explicit CORS allowlists and do not require cookies.
+- Quote, sponsorship, status, and readiness responses use `Cache-Control: no-store`.
+- Request bodies are bounded; oversized bodies receive `413`.
+- Unsupported JSON content types receive `415`.
+- Clients should attach a diagnostic request ID but must not use it as an idempotency key.
+
+## Retry rules
+
+Safe retry behavior depends on the stage:
+
+| Operation | Retry guidance |
+| --- | --- |
+| `GET /v1/info` | Retry with ordinary cache and network policy |
+| `POST /v1/quotes` | A retry may create a new quote; use only the selected response |
+| `POST /v1/sponsorships` | Retry the exact same quote ID and transaction bytes |
+| Status lookup | Retry with bounded backoff until terminal or application timeout |
+
+## Errors
+
+Relay errors include a stable machine-readable code and message. Dapps should distinguish invalid intent, expired quotes, unavailable operators, simulation failures, wallet incompatibility, and chain execution failures.
+
+```json title="error response"
+{
+  "error": "QUOTE_EXPIRED",
+  "message": "Quote has expired."
+}
+```
+
+HTTP status communicates the broad class; the error code determines product behavior. Do not show only “request failed” when the code can tell the user to reconnect a wallet, refresh a quote, adjust a fee cap, or retry later.

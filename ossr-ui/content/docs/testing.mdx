@@ -1,0 +1,53 @@
+---
+title: Testing and verification
+description: Validate contracts, relay policy, state stores, types, and the testnet transaction path.
+---
+
+Run tests from the repository root after installing dependencies.
+
+## Static and contract checks
+
+```bash
+npm run typecheck
+npm run clarinet:check
+npm run test:contracts
+```
+
+## Relay correctness
+
+```bash
+npm run test:relay-policy
+npm run test:quote-store
+npm run test:nonce-store
+npm run test:transaction-state
+npm run test:simulation-response
+```
+
+These suites cover malformed transactions, origin mismatch, quote policy, replay and idempotency state, sponsor nonce durability, simulation validation, and transaction lifecycle transitions.
+
+## Local readiness
+
+Start the relay and inspect its public boundaries:
+
+```bash
+npm run operator:serve
+curl -fsS http://127.0.0.1:3002/v1/info
+curl -fsS http://127.0.0.1:3002/health/live
+curl -fsS http://127.0.0.1:3002/health/ready
+```
+
+`/health/live` proves the HTTP process is alive. `/health/ready` additionally checks operator dependencies and sponsor balance, so it can return `503` while liveness remains healthy.
+
+## End-to-end testnet transfer
+
+With funded testnet accounts, deployed adapter values, quote signing, and simulation configured:
+
+```bash
+npm run operator:client -- --wait
+```
+
+A successful run prints submission and confirmation events. Verify that the user spends zero STX, the recipient receives the requested sats, the sponsor receives the quoted sats, and the sponsor pays the STX network fee.
+
+## Controlled failures
+
+Include rejection tests for wrong network, invalid origin signatures, unsupported contracts, mismatched quote arguments, weak post-conditions, excessive fees, expired quotes, duplicate submissions, stale simulations, and insufficient balances. A rejection before sponsor signing must not consume a sponsor nonce unnecessarily.
