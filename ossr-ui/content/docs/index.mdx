@@ -7,6 +7,19 @@ OSSR lets a user send sBTC without holding STX. The user authorizes one exact to
 
 OSSR is an application-layer fee abstraction, not a change to Stacks consensus. STX remains the network fee asset. The relay temporarily supplies STX and receives the quoted reimbursement in sBTC inside the same adapter transaction.
 
+## Watch the OSSR overview
+
+<div className="not-prose my-6 aspect-video overflow-hidden rounded-xl border bg-fd-card shadow-sm">
+  <iframe
+    className="h-full w-full"
+    src="https://www.youtube-nocookie.com/embed/oZ53n-qdf9E"
+    title="OSSR protocol overview"
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+    referrerPolicy="strict-origin-when-cross-origin"
+    allowFullScreen
+  />
+</div>
+
 ## Why OSSR exists
 
 Sponsored authorization already exists in Stacks, but every application otherwise needs to operate its own sponsor, fee policy, signing system, monitoring, and transaction validation. OSSR defines a reusable boundary between wallets and independent relay operators:
