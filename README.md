@@ -14,6 +14,83 @@ Stacks supports sponsored transactions in which the transaction originator autho
 
 Open Stacks Sponsor Relay turns this existing capability into shared public infrastructure.
 
+## Run the relay and UI locally
+
+The relay and web interface are separate Node.js applications. Run them from
+two terminals. The relay listens on port `3002`; the UI listens on port `3000`.
+
+### 1. Install dependencies and configure the relay
+
+From the repository root:
+
+```sh
+npm install
+cp .env.example .env.local
+chmod 600 .env.local
+```
+
+Edit `.env.local` and provide the required **testnet-only** keys and addresses.
+At minimum, set `SPONSOR_PRIVATE_KEY`, `QUOTE_PRIVATE_KEY`,
+`USER_PRIVATE_KEY`, `RECIPIENT_ADDRESS`, and
+`STACKS_SIMULATION_AUTH_TOKEN`. Keep the checked-in testnet contract values
+unless you intentionally deployed different contracts. Never commit
+`.env.local`.
+
+The relay requires a Stacks Core 4.0.3+ follower for authenticated transaction
+simulation. Follow [the testnet follower setup](docs/PREGRANT-DEMO.md#4-start-and-synchronize-the-testnet-follower), then confirm that the local and public tips match:
+
+```sh
+curl -fsS http://127.0.0.1:20443/v2/info | jq .stacks_tip_height
+curl -fsS https://api.testnet.hiro.so/v2/info | jq .stacks_tip_height
+```
+
+Do not submit a sponsorship while the local height is behind. The relay will
+fail closed with `SIMULATION_STALE`; restarting the relay does not synchronize
+the follower.
+
+### 2. Start the relay
+
+From the repository root:
+
+```sh
+npm run operator:serve
+```
+
+In another terminal, verify it:
+
+```sh
+curl -fsS http://127.0.0.1:3002/health/live
+curl -fsS http://127.0.0.1:3002/health/ready
+curl -fsS http://127.0.0.1:3002/v1/info
+```
+
+`/health/ready` must report a healthy operator before submitting a transaction.
+An upstream `HTTP 429` produces `OPERATOR_UNAVAILABLE`; wait and retry or use a
+dedicated Stacks API endpoint.
+
+### 3. Start the UI
+
+From a second terminal:
+
+```sh
+cd ossr-ui
+npm install
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) and use the dashboard. The
+UI targets `http://127.0.0.1:3002` by default. To use another relay, create
+`ossr-ui/.env.local` before starting the UI:
+
+```dotenv
+NEXT_PUBLIC_OSSR_RELAY_URL=http://127.0.0.1:3002
+```
+
+For access from another device, set `OPERATOR_HOST=0.0.0.0` and add the UI's
+exact origin to `OSSR_CORS_ALLOWED_ORIGINS` in the root `.env.local`, then
+restart the relay. See [the operator README](apps/operator/README.md) and
+[the UI README](ossr-ui/README.md) for component-specific details.
+
 ## Current prototype status
 
 **Status as of September 19, 2026:** the single-relay, testnet-only pre-grant

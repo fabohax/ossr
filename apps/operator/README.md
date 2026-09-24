@@ -3,11 +3,19 @@
 The testnet-only `OssrOperator` component owns one sponsor wallet. It checks its
 STX balance, serializes sponsor nonce allocation, adds sponsor authorization,
 broadcasts fully signed transactions, retrieves transaction status, and writes
-structured JSON logs. It does not validate application policy or expose an HTTP
-API yet; those are Day 4 work.
+structured JSON logs. The relay API validates application policy before asking
+the operator to sign and broadcast.
+
+The CLI reads `.env.local` first and then `.env`, both from the repository root.
+Copy the example and keep the populated file private:
+
+```sh
+cp .env.example .env.local
+chmod 600 .env.local
+```
 
 Configure `SPONSOR_PRIVATE_KEY`, `STACKS_API_URL`, and optionally
-`OPERATOR_MINIMUM_BALANCE_MICROSTX` in `.env`, then run:
+`OPERATOR_MINIMUM_BALANCE_MICROSTX`, then run:
 
 ```sh
 npm run operator:health
@@ -38,7 +46,12 @@ npm run operator:nonce-status
 npm run operator:nonce-reconcile
 ```
 
-## Day 4 relay API
+## Run the local relay API
+
+Run commands below from the repository root. Install dependencies first with
+`npm install`. A real sponsorship also requires the authenticated Stacks Core
+follower configured by `STACKS_SIMULATION_API_URL` and
+`STACKS_SIMULATION_AUTH_TOKEN`; its tip must match the public Stacks API tip.
 
 Start the local HTTP relay with:
 
@@ -49,7 +62,19 @@ npm run operator:serve
 It listens on `127.0.0.1:3002` by default (`OPERATOR_HOST` and
 `OPERATOR_PORT` override this). When testing the web UI from a LAN origin such
 as `http://192.168.18.82:3000`, set `OPERATOR_HOST=0.0.0.0` and include that
-origin in `OSSR_CORS_ALLOWED_ORIGINS`.
+origin in `OSSR_CORS_ALLOWED_ORIGINS`. After startup, verify readiness:
+
+```sh
+curl -fsS http://127.0.0.1:3002/health/live
+curl -fsS http://127.0.0.1:3002/health/ready
+curl -fsS http://127.0.0.1:3002/v1/info
+```
+
+`/health/ready` checks the sponsor's indexed STX balance and can temporarily
+return `503 OPERATOR_UNAVAILABLE` if the configured public API rate-limits the
+request. `503 SIMULATION_STALE` means the local simulation follower is behind;
+restart or resynchronize that follower rather than restarting this relay.
+
 The interface-facing v1 endpoints are:
 
 ```text

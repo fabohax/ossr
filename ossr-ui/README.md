@@ -27,10 +27,37 @@ Leather or Xverse.
 
 ## Local development
 
+The UI and relay run as separate processes. Start the relay from the repository
+root first:
+
 ```sh
+npm install
+npm run operator:serve
+```
+
+Verify that `http://127.0.0.1:3002/health/ready` returns HTTP 200. Then, in a
+second terminal, start the UI:
+
+```sh
+cd ossr-ui
 npm install
 npm run dev
 ```
 
-Set `NEXT_PUBLIC_OSSR_RELAY_URL` to point at a running OSSR relay. The default
-is `http://127.0.0.1:3000`.
+Open `http://localhost:3000`. The dashboard points to the relay on
+`http://127.0.0.1:3002` by default. To override it, create
+`ossr-ui/.env.local` before running `npm run dev`:
+
+```dotenv
+NEXT_PUBLIC_OSSR_RELAY_URL=http://127.0.0.1:3002
+```
+
+Next.js reads this UI-specific file from `ossr-ui`; the relay continues to read
+the root `.env.local`. When opening the UI through a LAN hostname or address,
+bind the relay with `OPERATOR_HOST=0.0.0.0` and add the UI's exact origin to the
+root `OSSR_CORS_ALLOWED_ORIGINS` value.
+
+Browsing the UI and fetching relay metadata do not require a synchronized local
+Stacks node. Submitting a sponsorship does: if the simulation follower is
+behind the public testnet tip, the relay intentionally returns HTTP 503 with
+`SIMULATION_STALE`.

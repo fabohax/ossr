@@ -128,7 +128,7 @@ function displayError(error: unknown): DisplayError {
     };
   }
   if (error instanceof TypeError && /fetch|network|failed/i.test(error.message)) {
-    return { title: 'The relay could not be reached', message: 'The relay may be offline or blocked by your network.', action: 'Check the relay endpoint and your connection, then try again.' };
+    return { title: 'The relay could not be reached', message: 'The relay may be offline or blocked by your network.', action: 'Check the relay endpoint and your connection, then try again. For local testing, clone the repository and run the relay locally.' };
   }
   return {
     title: 'We couldn\'t complete that request',
@@ -312,7 +312,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
       }
     };
     void poll();
-    const interval = window.setInterval(poll, 10_000);
+    const interval = window.setInterval(poll, 1_000);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
@@ -615,8 +615,8 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                       </div>
                       <Accordion type="single" collapsible className="sm:col-span-2">
                         <AccordionItem value="memo" className="rounded-lg border px-3">
-                          <AccordionTrigger className="cursor-pointer py-3 text-sm">Add memo</AccordionTrigger>
-                          <AccordionContent className="pb-3">
+                          <AccordionTrigger className="m-1 cursor-pointer py-3 text-sm">Add memo</AccordionTrigger>
+                          <AccordionContent className="px-1 pt-1 pb-3">
                             <div className="grid gap-2">
                               <Label htmlFor="memo">Memo text <span className="font-normal text-muted-foreground">(optional)</span></Label>
                               <Input id="memo" value={memo} onChange={event => setMemo(event.target.value)} placeholder="Add a short message…" autoComplete="off" className={`bg-transparent dark:bg-transparent ${embedded ? 'focus-visible:border-input focus-visible:ring-0' : ''}`} />
