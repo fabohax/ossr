@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OSSR Operator</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <div class="shell">
+      <aside>
+        <div class="brand"><span class="mark">O</span><div><strong>OSSR</strong><small>OPERATOR CONSOLE</small></div></div>
+        <nav aria-label="Main navigation">
+          <button class="nav active"><span>◫</span>Overview</button>
+          <button class="nav" disabled><span>⇄</span>Activity <em>Soon</em></button>
+          <button class="nav" disabled><span>⌁</span>Policy <em>Soon</em></button>
+          <button class="nav" disabled><span>≡</span>Logs <em>Soon</em></button>
+        </nav>
+        <div class="network-card">
+          <span class="eyebrow">NETWORK</span>
+          <div><i class="dot amber"></i><strong id="network">Testnet</strong></div>
+          <small>Preview environment</small>
+        </div>
+        <div class="aside-footer">v0.1.0 preview<br /><span>Local control plane</span></div>
+      </aside>
+
+      <main>
+        <header>
+          <div><p class="eyebrow">OPERATIONS / OVERVIEW</p><h1>Relay control room</h1></div>
+          <div class="header-actions">
+            <span id="last-updated">Waiting for first check</span>
+            <button id="refresh" class="icon-button" aria-label="Refresh">↻</button>
+            <span id="overall-pill" class="pill muted"><i class="dot"></i>Checking</span>
+          </div>
+        </header>
+
+        <section id="notice" class="notice hidden" role="alert"></section>
+
+        <section class="hero">
+          <div>
+            <p class="eyebrow">SYSTEM STATUS</p>
+            <h2 id="hero-title">Checking your relay</h2>
+            <p id="hero-copy">Connecting to the local operator and Stacks follower.</p>
+          </div>
+          <div class="hero-ring"><span id="hero-score">—</span><small>services ready</small></div>
+        </section>
+
+        <section class="cards three">
+          <article class="card status-card">
+            <div class="card-top"><span class="icon green">R</span><span id="relay-badge" class="badge muted">CHECKING</span></div>
+            <p class="eyebrow">RELAY</p><h3 id="relay-state">Connecting</h3>
+            <p id="relay-detail">http://127.0.0.1:3002</p>
+            <div class="metric-row"><span>Response</span><strong id="relay-latency">—</strong></div>
+          </article>
+          <article class="card status-card">
+            <div class="card-top"><span class="icon blue">N</span><span id="node-badge" class="badge muted">CHECKING</span></div>
+            <p class="eyebrow">STACKS FOLLOWER</p><h3 id="node-state">Connecting</h3>
+            <p id="node-detail">Waiting for node information</p>
+            <div class="metric-row"><span>Tip height</span><strong id="tip-height">—</strong></div>
+          </article>
+          <article class="card status-card">
+            <div class="card-top"><span class="icon violet">S</span><span id="sync-badge" class="badge muted">CHECKING</span></div>
+            <p class="eyebrow">CHAIN SYNC</p><h3 id="sync-state">Comparing tips</h3>
+            <p id="sync-detail">Local node against public testnet</p>
+            <div class="metric-row"><span>Blocks behind</span><strong id="blocks-behind">—</strong></div>
+          </article>
+        </section>
+
+        <section class="content-grid">
+          <article class="card">
+            <div class="section-heading"><div><p class="eyebrow">OPERATOR</p><h3>Relay identity</h3></div><span id="readiness" class="badge muted">UNKNOWN</span></div>
+            <dl class="details">
+              <div><dt>Relay ID</dt><dd id="relay-id">—</dd></div>
+              <div><dt>Sponsor principal</dt><dd id="sponsor">—</dd></div>
+              <div><dt>Sponsor balance</dt><dd id="balance">—</dd></div>
+              <div><dt>Quote service</dt><dd id="quotes">—</dd></div>
+              <div><dt>Sponsorships</dt><dd id="sponsorships">—</dd></div>
+            </dl>
+          </article>
+
+          <article class="card">
+            <div class="section-heading"><div><p class="eyebrow">THIS SESSION</p><h3>Relay traffic</h3></div><span id="uptime">— uptime</span></div>
+            <div class="stats">
+              <div><strong id="requests">—</strong><span>Requests</span></div>
+              <div><strong id="broadcasts">—</strong><span>Broadcasts</span></div>
+              <div><strong id="confirmations">—</strong><span>Confirmed</span></div>
+              <div><strong id="rejections">—</strong><span>Rejected</span></div>
+            </div>
+            <div class="progress"><i id="success-bar"></i></div>
+            <p class="fineprint">Process-local metrics reset whenever the relay restarts.</p>
+          </article>
+        </section>
+
+        <section class="card service-panel">
+          <div>
+            <p class="eyebrow">LINUX SERVICES</p><h3>Startup & service control</h3>
+            <p>Run the relay as a protected system service from boot, while keeping this dashboard in your desktop session.</p>
+          </div>
+          <div class="service-statuses">
+            <span>Relay <b id="relay-service">Checking</b></span>
+            <span>Dashboard <b id="dashboard-service">Checking</b></span>
+          </div>
+          <div class="service-actions">
+            <button id="install" class="button secondary">Install system service</button>
+            <button id="toggle-relay" class="button secondary" disabled>Start relay</button>
+            <label class="switch"><input id="autostart" type="checkbox" disabled /><i></i><span>Start automatically</span></label>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="install-dialog">
+      <form method="dialog">
+        <p class="eyebrow">INSTALL USER SERVICES</p><h2>Relay location</h2>
+        <p>Choose the repository folder containing <code>package.json</code>. Linux will ask for an administrator password through Polkit.</p>
+        <label>Repository path<input id="relay-directory" value="" placeholder="/home/you/ossr" /></label>
+        <div class="dialog-actions"><button value="cancel" class="button secondary">Cancel</button><button id="confirm-install" value="default" class="button primary">Install</button></div>
+      </form>
+    </dialog>
+  </body>
+</html>

@@ -15,6 +15,8 @@
     "operator:nonce-reconcile": "tsx apps/operator/src/cli.ts nonce-reconcile",
     "operator:serve": "tsx apps/operator/src/cli.ts serve",
     "operator:client": "tsx apps/operator/src/client.ts",
+    "operator:desktop": "cargo run --manifest-path apps/operator-desktop/src-tauri/Cargo.toml",
+    "operator:desktop:test": "cargo test --manifest-path apps/operator-desktop/src-tauri/Cargo.toml --no-default-features",
     "clarinet:check": "clarinet check",
     "devnet:generate": "clarinet deployments generate --devnet --manual-cost",
     "devnet:start": "clarinet devnet start --no-dashboard --from-genesis --use-on-disk-deployment-plan",
