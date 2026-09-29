@@ -8,7 +8,10 @@ use thiserror::Error;
 
 const RELAY_UNIT: &str = "ossr-relay.service";
 const DASHBOARD_UNIT: &str = "ossr-operator-dashboard.service";
+const DESKTOP_ENTRY: &str = "network.ossr.operator.desktop";
+const DESKTOP_ICON: &str = "network.ossr.operator.png";
 const SYSTEM_UNIT_DIRECTORY: &str = "/etc/systemd/system";
+const ICON_BYTES: &[u8] = include_bytes!("../icons/icon.png");
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
@@ -76,8 +79,31 @@ pub fn install(relay_directory: &Path) -> Result<AutostartState, ServiceError> {
         ),
         0o600,
     )?;
+    install_desktop_launcher(&executable)?;
     systemctl(Scope::User, &["daemon-reload"])?;
+    systemctl(Scope::User, &["enable", DASHBOARD_UNIT])?;
     Ok(status())
+}
+
+fn install_desktop_launcher(executable: &Path) -> Result<(), ServiceError> {
+    let data_directory = dirs::data_local_dir().ok_or(ServiceError::NoConfigDirectory)?;
+    let application_directory = data_directory.join("applications");
+    let icon_directory = data_directory.join("icons/hicolor/256x256/apps");
+    fs::create_dir_all(&application_directory)?;
+    fs::create_dir_all(&icon_directory)?;
+
+    let icon_path = icon_directory.join(DESKTOP_ICON);
+    write_file(&icon_path, ICON_BYTES, 0o644)?;
+    let launcher = format!(
+        "[Desktop Entry]\nType=Application\nVersion=1.0\nName=OSSR Operator\nComment=Monitor and control the OSSR relay\nExec={}\nIcon=network.ossr.operator\nTerminal=false\nCategories=Network;\nStartupNotify=true\nStartupWMClass=network.ossr.operator\n",
+        desktop_exec_escape(executable),
+    );
+    write_file(
+        &application_directory.join(DESKTOP_ENTRY),
+        launcher.as_bytes(),
+        0o644,
+    )?;
+    Ok(())
 }
 
 pub fn set_autostart(enabled: bool) -> Result<AutostartState, ServiceError> {
@@ -297,13 +323,17 @@ fn command_error(output: &std::process::Output) -> String {
 }
 
 fn write_unit(path: &Path, contents: &str, mode: u32) -> Result<(), std::io::Error> {
+    write_file(path, contents.as_bytes(), mode)
+}
+
+fn write_file(path: &Path, contents: &[u8], mode: u32) -> Result<(), std::io::Error> {
     let mut file = fs::OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
         .mode(mode)
         .open(path)?;
-    file.write_all(contents.as_bytes())
+    file.write_all(contents)
 }
 
 fn find_executable(name: &str) -> Option<PathBuf> {
@@ -324,6 +354,18 @@ fn systemd_escape(path: &Path) -> String {
     )
 }
 
+fn desktop_exec_escape(path: &Path) -> String {
+    format!(
+        "\"{}\"",
+        path.to_string_lossy()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('`', "\\`")
+            .replace('$', "\\$")
+            .replace('%', "%%")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +373,14 @@ mod tests {
     #[test]
     fn quotes_systemd_paths() {
         assert_eq!(systemd_escape(Path::new("/tmp/a b")), "\"/tmp/a b\"");
+    }
+
+    #[test]
+    fn quotes_desktop_entry_executables() {
+        assert_eq!(
+            desktop_exec_escape(Path::new("/tmp/a b/100% app")),
+            "\"/tmp/a b/100%% app\""
+        );
     }
 
     #[test]

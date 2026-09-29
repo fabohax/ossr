@@ -66,6 +66,8 @@ globalThis.fetch = async input => {
   if (url.endsWith('/v2/info')) return new Response(JSON.stringify({ stacks_tip_height: stacksHeight }), { status: 200 });
   if (url.includes('/extended/v1/address/') && url.endsWith('/stx')) return new Response(JSON.stringify({ balance: '1000000', locked: '0' }), { status: 200 });
   if (url.endsWith('/v2/fees/transfer')) return new Response('1', { status: 200 });
+  if (url === 'https://pricing.invalid') return new Response('Forbidden', { status: 403 });
+  if (url === 'https://api.coinbase.com/v2/exchange-rates?currency=STX') return new Response(JSON.stringify({ data: { rates: { BTC: '0.000005' } } }), { status: 200 });
   if (url.includes('api.coingecko.com/api/v3/simple/price')) return new Response(JSON.stringify({ blockstack: { usd: 0.4 }, bitcoin: { usd: 80_000 } }), { status: 200 });
   throw new Error(`Unexpected fetch in relay policy test: ${url}`);
 };
@@ -507,6 +509,22 @@ try {
     assert.equal(secondSnapshot.body.sponsorships.rejections, 1);
   } finally {
     await new Promise<void>((resolve, reject) => metricsServer.close(error => error ? reject(error) : resolve()));
+  }
+
+  const unavailablePricingRelay = new OssrRelayApi({
+    operator,
+    dynamicPricing: true,
+    pricingApiUrl: 'https://pricing.invalid',
+  });
+  const unavailablePricingServer = unavailablePricingRelay.createServer();
+  const unavailablePricingPort = await listen(unavailablePricingServer);
+  try {
+    const unavailable = await httpJson(unavailablePricingPort, '/v1/info');
+    assert.equal(unavailable.status, 503);
+    assert.equal(unavailable.body.error, 'PRICING_UNAVAILABLE');
+    assert.equal((await httpJson(unavailablePricingPort, '/health/live')).status, 200, 'a dependency error must not crash the relay');
+  } finally {
+    await new Promise<void>((resolve, reject) => unavailablePricingServer.close(error => error ? reject(error) : resolve()));
   }
 } finally {
   globalThis.fetch = originalFetch;

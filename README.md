@@ -91,6 +91,30 @@ exact origin to `OSSR_CORS_ALLOWED_ORIGINS` in the root `.env.local`, then
 restart the relay. See [the operator README](apps/operator/README.md) and
 [the UI README](ossr-ui/README.md) for component-specific details.
 
+### 4. Run the Linux operator desktop
+
+The Rust/Tauri operator desktop monitors relay readiness, sponsor balance,
+session activity, and local Stacks follower synchronization. It can also
+install the relay as a machine-level systemd service and ask for administrator
+authentication through the standard Linux Polkit dialog.
+
+Download the `v0.1.0` Linux x86-64 archive from the
+[GitHub release](https://github.com/ossr-protocol/ossr/releases/tag/v0.1.0),
+then extract and run it:
+
+```sh
+tar -xzf ossr-operator-desktop-v0.1.0-linux-x86_64.tar.gz
+cd ossr-operator-desktop-v0.1.0-linux-x86_64
+./ossr-operator-desktop
+```
+
+The desktop expects the relay at `http://127.0.0.1:3002` and the synchronized
+Stacks follower at `http://127.0.0.1:20443`. Configure `.env.local` and start
+those services first, or use **Install system service** inside the desktop to
+install the configured repository relay for automatic startup. See the
+[operator desktop README](apps/operator-desktop/README.md) for build-from-source,
+runtime dependency, and autostart details.
+
 ## Current prototype status
 
 **Status as of September 19, 2026:** the single-relay, testnet-only pre-grant

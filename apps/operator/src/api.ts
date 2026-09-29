@@ -200,7 +200,20 @@ export class OssrRelayApi {
   }
 
   createServer(): Server {
-    const server = createServer((request, response) => void this.handle(request, response));
+    const server = createServer((request, response) => {
+      void this.handle(request, response).catch(error => {
+        const relayError = toRelayError(error);
+        this.log('relay.request.failed', { code: relayError.code, message: relayError.message });
+        if (response.headersSent) {
+          response.destroy();
+          return;
+        }
+        respond(request, response, relayError.status, {
+          error: relayError.code,
+          message: relayError.message,
+        }, this.corsAllowedOrigins);
+      });
+    });
     if (this.config.reimbursementService) {
       const interval = setInterval(() => void this.reconcileReimbursements(), this.config.reimbursementPollIntervalMs ?? 10_000);
       interval.unref();
@@ -602,16 +615,23 @@ export class OssrRelayApi {
     try {
       const [feeResponse, priceResponse] = await Promise.all([
         fetch(`${this.stacksApiUrl}/v2/fees/transfer`, { headers: { Accept: 'text/plain' } }),
-        fetch(this.config.pricingApiUrl ?? 'https://api.coingecko.com/api/v3/simple/price?ids=blockstack,bitcoin&vs_currencies=usd', { headers: { Accept: 'application/json' } }),
+        fetch(this.config.pricingApiUrl ?? 'https://api.coinbase.com/v2/exchange-rates?currency=STX', { headers: { Accept: 'application/json' } }),
       ]);
       if (!feeResponse.ok || !priceResponse.ok) throw new Error(`pricing dependency returned HTTP ${!feeResponse.ok ? feeResponse.status : priceResponse.status}`);
       const feeRateText = (await feeResponse.text()).trim();
       if (!/^[0-9]+$/.test(feeRateText) || BigInt(feeRateText) < 1n) throw new Error('invalid network fee rate');
-      const prices = await priceResponse.json() as { blockstack?: { usd?: unknown }; bitcoin?: { usd?: unknown } };
-      const stxUsd = positivePriceScale(prices.blockstack?.usd, 'STX');
-      const btcUsd = positivePriceScale(prices.bitcoin?.usd, 'BTC');
       const networkFeeMicroStx = BigInt(feeRateText) * estimatedBytes;
-      const networkCostSats = ceilDiv(networkFeeMicroStx * stxUsd * 100_000_000n, 1_000_000n * btcUsd);
+      const prices = await priceResponse.json() as {
+        blockstack?: { usd?: unknown };
+        bitcoin?: { usd?: unknown };
+        data?: { rates?: { BTC?: unknown } };
+      };
+      const networkCostSats = prices.data?.rates?.BTC !== undefined
+        ? ceilDiv(networkFeeMicroStx * positivePriceScale(prices.data.rates.BTC, 'STX/BTC'), 1_000_000n)
+        : ceilDiv(
+          networkFeeMicroStx * positivePriceScale(prices.blockstack?.usd, 'STX') * 100_000_000n,
+          1_000_000n * positivePriceScale(prices.bitcoin?.usd, 'BTC'),
+        );
       const floorSats = networkCostSats + infrastructure + riskReserve + minimumProfit;
       const result = { floorSats, networkFeeMicroStx, networkCostSats, expiresAt: Date.now() + (this.config.pricingCacheMs ?? 60_000) };
       this.pricingCache = result;
@@ -675,10 +695,11 @@ function ceilLog2(value: bigint): bigint {
 }
 
 function positivePriceScale(value: unknown, symbol: string): bigint {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) throw new Error(`invalid ${symbol}/USD price`);
+  const number = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  if (typeof number !== 'number' || !Number.isFinite(number) || number <= 0) throw new Error(`invalid ${symbol} price`);
   // Eight decimal places are enough for quote pricing. STX rounds upward and
   // BTC rounding error is negligible at this scale; the final division rounds up.
-  return BigInt(Math.max(1, Math.round(value * 100_000_000)));
+  return BigInt(Math.max(1, Math.round(number * 100_000_000)));
 }
 
 export function validateSimulationResponse(body: unknown, expectedTxid: string, minimumBlockHeight: number): void {
