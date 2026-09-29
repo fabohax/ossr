@@ -68,6 +68,47 @@ The dashboard does not contain signing keys. It reads public operational data
 from the configured local endpoints, while the relay continues to load secrets
 from the repository's protected `.env.local` file.
 
+## Independent clean-machine acceptance
+
+Run the acceptance procedure on a fresh supported Linux VM or a second machine,
+not on the development host. Download the published archive, clone this
+repository only for the relay and acceptance script, and run:
+
+```sh
+npm run operator:desktop:acceptance -- preflight \
+  --archive "$HOME/Downloads/ossr-operator-desktop-v0.1.0-linux-x86_64.tar.gz" \
+  --evidence-dir "$HOME/ossr-desktop-acceptance"
+```
+
+The preflight checks the published SHA-256 checksum and required host tools. It
+also creates `manual-observations.md`. Extract and open the verified archive,
+select **Install system service**, and use the repository clone as the relay
+directory. After the dashboard reports the installed services, run:
+
+```sh
+npm run operator:desktop:acceptance -- verify \
+  --evidence-dir "$HOME/ossr-desktop-acceptance"
+```
+
+Reboot the machine, log into the graphical session, and run the same `verify`
+command again. Each invocation creates a numbered evidence directory and
+records the boot ID, service state, public operational endpoints, and local and
+reference chain heights. It deliberately does not read `.env.local` or capture
+journal contents, which could contain sensitive data.
+
+Acceptance is complete only when both verification runs pass and the tester
+fills in `manual-observations.md` with:
+
+- confirmation that the native Polkit prompt handled authentication;
+- whether installation required any undocumented action;
+- observed relay-before-login and dashboard-after-login behavior;
+- one successful sponsored testnet transaction ID;
+- one controlled rejection and its result; and
+- any confusing or missing instructions.
+
+Keep the generated evidence directory out of the repository. Review it for
+unexpected sensitive information before sharing or attaching it to a release.
+
 ## Run from source
 
 On Debian/Ubuntu, install the Linux packages required by Tauri 2, then run the

@@ -17,6 +17,7 @@
     "operator:client": "tsx apps/operator/src/client.ts",
     "operator:desktop": "cargo run --manifest-path apps/operator-desktop/src-tauri/Cargo.toml",
     "operator:desktop:test": "cargo test --manifest-path apps/operator-desktop/src-tauri/Cargo.toml --no-default-features",
+    "operator:desktop:acceptance": "bash scripts/operator-desktop-acceptance.sh",
     "clarinet:check": "clarinet check",
     "devnet:generate": "clarinet deployments generate --devnet --manual-cost",
     "devnet:start": "clarinet devnet start --no-dashboard --from-genesis --use-on-disk-deployment-plan",
