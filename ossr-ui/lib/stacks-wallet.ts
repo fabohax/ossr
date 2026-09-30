@@ -7,8 +7,9 @@ export type WalletAddress = {
 export const approvedWalletProviderIds = [
   'LeatherProvider',
   'XverseProviders.BitcoinProvider',
-  'FordefiProviders.UtxoProvider',
 ];
+
+export const connectedWalletPublicKeyKey = 'ossr-ui:connected-stx-public-key';
 
 export function readWalletAddresses(response: unknown): WalletAddress[] {
   if (!isRecord(response)) return [];

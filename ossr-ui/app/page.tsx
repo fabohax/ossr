@@ -7,7 +7,7 @@ import { ArrowRight, Blocks, Check, ChevronRight, CircleDot, Code2, Github, Shie
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { enableDarkStacksWalletSelector } from '@/lib/stacks-wallet-theme';
-import { approvedWalletProviderIds, readStacksAddress } from '@/lib/stacks-wallet';
+import { approvedWalletProviderIds, connectedWalletPublicKeyKey, readStacksAccount } from '@/lib/stacks-wallet';
 import Dashboard from './dashboard/page';
 import styles from './page.module.css';
 
@@ -43,6 +43,7 @@ export default function Home() {
     const { disconnect } = await import('@stacks/connect');
     disconnect();
     window.localStorage.removeItem(connectedAddressKey);
+    window.localStorage.removeItem(connectedWalletPublicKeyKey);
     setConnectedAddress('');
     setTransferOpen(false);
   }
@@ -58,10 +59,12 @@ export default function Home() {
     try {
       const { connect } = await import('@stacks/connect');
       const response = await connect({ forceWalletSelect: true, approvedProviderIds: approvedWalletProviderIds });
-      const address = readStacksAddress(response);
-      if (!address) throw new Error('The wallet connected but did not return a Stacks address.');
-      window.localStorage.setItem(connectedAddressKey, address);
-      setConnectedAddress(address);
+      const account = readStacksAccount(response);
+      if (!account?.address) throw new Error('The wallet connected but did not return a Stacks address.');
+      window.localStorage.setItem(connectedAddressKey, account.address);
+      if (account.publicKey) window.localStorage.setItem(connectedWalletPublicKeyKey, account.publicKey);
+      else window.localStorage.removeItem(connectedWalletPublicKeyKey);
+      setConnectedAddress(account.address);
       setTransferOpen(true);
     } catch (caught) {
       setWalletError(caught instanceof Error ? caught.message : 'The wallet could not be connected.');

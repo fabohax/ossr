@@ -14,7 +14,7 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { enableDarkStacksWalletSelector } from '@/lib/stacks-wallet-theme';
-import { approvedWalletProviderIds, readStacksAccount, readStacksAddress, requiresPrebuiltSponsoredTransaction } from '@/lib/stacks-wallet';
+import { approvedWalletProviderIds, connectedWalletPublicKeyKey, readStacksAccount, requiresPrebuiltSponsoredTransaction } from '@/lib/stacks-wallet';
 import {
   adapterErrorFromStatus,
   describeChainStatus,
@@ -335,6 +335,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
 
   function clearConnectedWalletState() {
     window.localStorage.removeItem(connectedAddressKey);
+    window.localStorage.removeItem(connectedWalletPublicKeyKey);
     setOrigin('');
     setSbtcBalance(undefined);
     setQuoteResponse(undefined);
@@ -352,11 +353,13 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
       }
       const stopWalletThemeObserver = enableDarkStacksWalletSelector();
       const response = await connect({ forceWalletSelect: true, approvedProviderIds: approvedWalletProviderIds }).finally(stopWalletThemeObserver);
-      const stxAddress = readStacksAddress(response);
-      if (!stxAddress) throw new Error('Wallet did not return a Stacks address.');
-      setOrigin(stxAddress);
-      window.localStorage.setItem(connectedAddressKey, stxAddress);
-      onWalletChange?.(stxAddress);
+      const account = readStacksAccount(response);
+      if (!account?.address) throw new Error('Wallet did not return a Stacks address.');
+      setOrigin(account.address);
+      window.localStorage.setItem(connectedAddressKey, account.address);
+      if (account.publicKey) window.localStorage.setItem(connectedWalletPublicKeyKey, account.publicKey);
+      else window.localStorage.removeItem(connectedWalletPublicKeyKey);
+      onWalletChange?.(account.address);
     });
   }
 
@@ -841,17 +844,16 @@ async function signPreparedTransactionWithCompatibleWallet(
   prepared: ReturnType<typeof prepareWalletContractCall>,
   origin: string,
 ) {
-  const { request } = await import('@stacks/connect');
-  const accounts = await request('stx_getAccounts', { network: 'testnet' });
-  const account = readStacksAccount(accounts, origin);
-  if (!account?.publicKey) {
-    throw new Error('The wallet did not return the public key for the connected Stacks account. Reconnect the wallet and try again.');
+  const publicKey = window.localStorage.getItem(connectedWalletPublicKeyKey);
+  if (!publicKey) {
+    throw new Error('This wallet connection predates sponsored signing. Disconnect and reconnect the wallet, then try again.');
   }
   const transaction = await prepareUnsignedSponsoredTransaction({
     call: prepared,
     origin,
-    publicKey: account.publicKey,
+    publicKey,
   });
+  const { request } = await import('@stacks/connect');
   return request('stx_signTransaction', { transaction, broadcast: false });
 }
 

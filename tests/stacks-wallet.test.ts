@@ -21,8 +21,13 @@ describe('readStacksAddress', () => {
     expect(readStacksAddress({ addresses: [{ address: 'bc1qexample' }] })).toBeUndefined();
   });
 
-  it('excludes Asigna from the approved wallet selector', () => {
+  it('only offers wallets supported by the OSSR signing flows', () => {
+    expect(approvedWalletProviderIds).toEqual([
+      'LeatherProvider',
+      'XverseProviders.BitcoinProvider',
+    ]);
     expect(approvedWalletProviderIds).not.toContain('AsignaProvider');
+    expect(approvedWalletProviderIds).not.toContain('FordefiProviders.UtxoProvider');
   });
 
   it('uses prebuilt sponsored transactions for Xverse and Fordefi', () => {

@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { enableDarkStacksWalletSelector } from '@/lib/stacks-wallet-theme';
-import { approvedWalletProviderIds, readStacksAddress } from '@/lib/stacks-wallet';
+import { approvedWalletProviderIds, connectedWalletPublicKeyKey, readStacksAccount } from '@/lib/stacks-wallet';
 
 const contractAddress = process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ADDRESS
   ?? 'ST2SY3PZHMVQMYN1W4SBJ9MPHW4P8J01ST7TVQ68X';
@@ -38,10 +38,12 @@ export function OperatorRegistration() {
       const { connect } = await import('@stacks/connect');
       const stopWalletThemeObserver = enableDarkStacksWalletSelector();
       const response = await connect({ forceWalletSelect: true, approvedProviderIds: approvedWalletProviderIds }).finally(stopWalletThemeObserver);
-      const stxAddress = readStacksAddress(response);
-      if (!stxAddress) throw new Error('The wallet did not return a Stacks address.');
-      setAddress(stxAddress);
-      window.localStorage.setItem(connectedAddressKey, stxAddress);
+      const account = readStacksAccount(response);
+      if (!account?.address) throw new Error('The wallet did not return a Stacks address.');
+      setAddress(account.address);
+      window.localStorage.setItem(connectedAddressKey, account.address);
+      if (account.publicKey) window.localStorage.setItem(connectedWalletPublicKeyKey, account.publicKey);
+      else window.localStorage.removeItem(connectedWalletPublicKeyKey);
     } catch (caught) {
       setError(messageFrom(caught));
     } finally {
