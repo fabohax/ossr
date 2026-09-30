@@ -7,6 +7,7 @@ import { ArrowRight, Blocks, Check, ChevronRight, CircleDot, Code2, Github, Shie
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { enableDarkStacksWalletSelector } from '@/lib/stacks-wallet-theme';
+import { approvedWalletProviderIds, readStacksAddress } from '@/lib/stacks-wallet';
 import Dashboard from './dashboard/page';
 import styles from './page.module.css';
 
@@ -28,26 +29,11 @@ function compactAddress(address: string): string {
   return address.length > 10 ? `${address.slice(0, 5)}…${address.slice(-4)}` : address;
 }
 
-function stacksAddressFromResponse(response: unknown): string | undefined {
-  if (typeof response !== 'object' || response === null || Array.isArray(response)) return undefined;
-  const outer = response as Record<string, unknown>;
-  const result = typeof outer.result === 'object' && outer.result !== null && !Array.isArray(outer.result)
-    ? outer.result as Record<string, unknown>
-    : outer;
-  if (!Array.isArray(result.addresses)) return undefined;
-  const address = result.addresses.find(candidate => (
-    typeof candidate === 'object'
-    && candidate !== null
-    && (candidate as Record<string, unknown>).symbol === 'STX'
-    && typeof (candidate as Record<string, unknown>).address === 'string'
-  )) as Record<string, unknown> | undefined;
-  return address?.address as string | undefined;
-}
-
 export default function Home() {
   const [transferOpen, setTransferOpen] = useState(false);
   const [connectedAddress, setConnectedAddress] = useState('');
   const [connectingWallet, setConnectingWallet] = useState(false);
+  const [walletError, setWalletError] = useState('');
 
   useEffect(() => {
     setConnectedAddress(window.localStorage.getItem(connectedAddressKey) ?? '');
@@ -67,17 +53,18 @@ export default function Home() {
       return;
     }
     setConnectingWallet(true);
+    setWalletError('');
     const stopWalletThemeObserver = enableDarkStacksWalletSelector();
     try {
       const { connect } = await import('@stacks/connect');
-      const response = await connect({ forceWalletSelect: true });
-      const address = stacksAddressFromResponse(response);
-      if (!address) return;
+      const response = await connect({ forceWalletSelect: true, approvedProviderIds: approvedWalletProviderIds });
+      const address = readStacksAddress(response);
+      if (!address) throw new Error('The wallet connected but did not return a Stacks address.');
       window.localStorage.setItem(connectedAddressKey, address);
       setConnectedAddress(address);
       setTransferOpen(true);
-    } catch {
-      // Closing or rejecting the wallet picker leaves the user disconnected.
+    } catch (caught) {
+      setWalletError(caught instanceof Error ? caught.message : 'The wallet could not be connected.');
     } finally {
       stopWalletThemeObserver();
       setConnectingWallet(false);
@@ -89,7 +76,7 @@ export default function Home() {
     <header className={styles.header}>
       <Link href="/" className={styles.brand} aria-label="OSSR home"><span>OSSR</span></Link>
       <nav className={styles.nav} aria-label="Primary navigation"><Link href="/docs">DOCS</Link><Link href="/operators">OPERATORS</Link><Link href="/developers">DEVELOPERS</Link></nav>
-      <div className={styles.walletControls}>
+      <div className={`${styles.walletControls} relative`}>
         {connectedAddress ? (
           <Button variant="ghost" size="icon" className={styles.disconnect} onClick={() => void disconnectWallet()} aria-label="Disconnect wallet" title="Disconnect wallet">
             <Image src="/sign-out.svg" alt="" width={19} height={19} />
@@ -99,6 +86,7 @@ export default function Home() {
           <Image src="/wallet.svg" alt="" width={18} height={18} className={styles.walletIcon} />
           {connectedAddress ? compactAddress(connectedAddress) : connectingWallet ? 'Connecting…' : 'Connect Wallet'}
         </Button>
+        {walletError ? <p className="absolute top-[calc(100%+8px)] right-0 w-max max-w-70 text-right text-xs leading-5 text-red-300" role="alert">{walletError}</p> : null}
       </div>
     </header>
 

@@ -1,5 +1,9 @@
 import {
   bufferCV,
+  deserializeCV,
+  fetchNonce,
+  getAddressFromPublicKey,
+  makeUnsignedContractCall,
   noneCV,
   Pc,
   PostConditionMode,
@@ -206,6 +210,33 @@ export function prepareWalletContractCall(input: {
     postConditionMode: 'deny',
     sponsored: true,
   };
+}
+
+export async function prepareUnsignedSponsoredTransaction(input: {
+  call: PreparedWalletCall;
+  origin: string;
+  publicKey: string;
+  nonce?: bigint;
+}): Promise<string> {
+  const derivedAddress = getAddressFromPublicKey(input.publicKey, 'testnet');
+  if (derivedAddress !== input.origin) {
+    throw new Error('The wallet public key does not match the connected Stacks address. Reconnect the wallet and try again.');
+  }
+  const nonce = input.nonce ?? await fetchNonce({ address: input.origin, network: 'testnet' });
+  const transaction = await makeUnsignedContractCall({
+    contractAddress: input.call.contractAddress,
+    contractName: input.call.contractName,
+    functionName: input.call.functionName,
+    functionArgs: input.call.functionArgs.map(deserializeCV),
+    postConditions: input.call.postConditions,
+    postConditionMode: input.call.postConditionMode,
+    publicKey: input.publicKey,
+    nonce,
+    fee: 0n,
+    sponsored: true,
+    network: 'testnet',
+  });
+  return `0x${transaction.serialize()}`;
 }
 
 export function extractRawTransaction(result: unknown): string | undefined {

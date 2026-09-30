@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { enableDarkStacksWalletSelector } from '@/lib/stacks-wallet-theme';
+import { approvedWalletProviderIds, readStacksAccount, readStacksAddress, requiresPrebuiltSponsoredTransaction } from '@/lib/stacks-wallet';
 import {
   adapterErrorFromStatus,
   describeChainStatus,
@@ -25,6 +26,7 @@ import {
   isTerminalChainStatus,
   likelyFailureCause,
   prepareWalletContractCall,
+  prepareUnsignedSponsoredTransaction,
   requestQuote,
   RelayRequestError,
   submitSponsorship,
@@ -34,12 +36,6 @@ import {
   type SponsorshipResponse,
   type SponsorshipStatus,
 } from '../../lib/ossr';
-
-type WalletAddress = {
-  symbol?: string;
-  address?: string;
-  publicKey?: string;
-};
 
 const connectedAddressKey = 'ossr-ui:connected-stx-address';
 const recentRecipientsKey = 'ossr-ui:recent-recipients';
@@ -355,13 +351,12 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
         clearConnectedWalletState();
       }
       const stopWalletThemeObserver = enableDarkStacksWalletSelector();
-      const response = await connect({ forceWalletSelect: true }).finally(stopWalletThemeObserver);
-      const addresses = readAddresses(response);
-      const stx = addresses.find(address => address.symbol === 'STX' && address.address);
-      if (!stx?.address) throw new Error('Wallet did not return a Stacks address.');
-      setOrigin(stx.address);
-      window.localStorage.setItem(connectedAddressKey, stx.address);
-      onWalletChange?.(stx.address);
+      const response = await connect({ forceWalletSelect: true, approvedProviderIds: approvedWalletProviderIds }).finally(stopWalletThemeObserver);
+      const stxAddress = readStacksAddress(response);
+      if (!stxAddress) throw new Error('Wallet did not return a Stacks address.');
+      setOrigin(stxAddress);
+      window.localStorage.setItem(connectedAddressKey, stxAddress);
+      onWalletChange?.(stxAddress);
     });
   }
 
@@ -436,22 +431,24 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
   async function signAndSubmit(quoteToSubmit = quoteResponse) {
     await run('submit', async () => {
       if (!quoteToSubmit) throw new Error('Request a quote first.');
-      const { request } = await import('@stacks/connect');
+      const { getSelectedProviderId, request } = await import('@stacks/connect');
       const prepared = prepareWalletContractCall({
         quote: quoteToSubmit.quote,
         recipient,
         amountSats,
         ...(memo.trim() ? { memo: normalizeMemo(memo) } : {}),
       });
-      const walletResult = await request('stx_callContract', {
-        contract: prepared.contract,
-        functionName: prepared.functionName,
-        functionArgs: prepared.functionArgs,
-        postConditions: prepared.postConditions,
-        postConditionMode: prepared.postConditionMode,
-        sponsored: true,
-        network: 'testnet',
-      });
+      const walletResult = requiresPrebuiltSponsoredTransaction(getSelectedProviderId())
+        ? await signPreparedTransactionWithCompatibleWallet(prepared, origin)
+        : await request('stx_callContract', {
+            contract: prepared.contract,
+            functionName: prepared.functionName,
+            functionArgs: prepared.functionArgs,
+            postConditions: prepared.postConditions,
+            postConditionMode: prepared.postConditionMode,
+            sponsored: true,
+            network: 'testnet',
+          });
       const transaction = extractRawTransaction(walletResult);
       if (!transaction) throw new Error('Wallet did not return raw signed transaction bytes. This wallet may only support sign-and-broadcast contract calls.');
       let response: SponsorshipResponse;
@@ -840,6 +837,24 @@ function ReviewRow({ label, value, valueNode, mono = false, emphasized = false }
   );
 }
 
+async function signPreparedTransactionWithCompatibleWallet(
+  prepared: ReturnType<typeof prepareWalletContractCall>,
+  origin: string,
+) {
+  const { request } = await import('@stacks/connect');
+  const accounts = await request('stx_getAccounts', { network: 'testnet' });
+  const account = readStacksAccount(accounts, origin);
+  if (!account?.publicKey) {
+    throw new Error('The wallet did not return the public key for the connected Stacks account. Reconnect the wallet and try again.');
+  }
+  const transaction = await prepareUnsignedSponsoredTransaction({
+    call: prepared,
+    origin,
+    publicKey: account.publicKey,
+  });
+  return request('stx_signTransaction', { transaction, broadcast: false });
+}
+
 function compact(value: string, edge = 8): string {
   return value.length > edge * 2 + 1 ? `${value.slice(0, edge)}…${value.slice(-edge)}` : value;
 }
@@ -847,12 +862,6 @@ function compact(value: string, edge = 8): string {
 function normalizeMemo(value: string): string {
   const bytes = new TextEncoder().encode(value);
   return `0x${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}`;
-}
-
-function readAddresses(response: unknown): WalletAddress[] {
-  if (!isRecord(response)) return [];
-  const result = isRecord(response.result) ? response.result : response;
-  return Array.isArray(result.addresses) ? result.addresses as WalletAddress[] : [];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

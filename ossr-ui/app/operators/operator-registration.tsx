@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { enableDarkStacksWalletSelector } from '@/lib/stacks-wallet-theme';
+import { approvedWalletProviderIds, readStacksAddress } from '@/lib/stacks-wallet';
 
 const contractAddress = process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ADDRESS
   ?? 'ST2SY3PZHMVQMYN1W4SBJ9MPHW4P8J01ST7TVQ68X';
@@ -16,8 +17,6 @@ const contractName = process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_NAME ?? 'operator
 const contractId = `${contractAddress}.${contractName}` as `${string}.${string}`;
 const subscriptionFeeMicroStx = 10_000_000n;
 const connectedAddressKey = 'ossr-ui:connected-stx-address';
-
-type WalletAddress = { symbol?: string; address?: string; publicKey?: string };
 
 export function OperatorRegistration() {
   const [address, setAddress] = useState('');
@@ -38,12 +37,11 @@ export function OperatorRegistration() {
     try {
       const { connect } = await import('@stacks/connect');
       const stopWalletThemeObserver = enableDarkStacksWalletSelector();
-      const response = await connect({ forceWalletSelect: true }).finally(stopWalletThemeObserver);
-      const addresses = readAddresses(response);
-      const stx = addresses.find(item => item.symbol === 'STX' && item.address);
-      if (!stx?.address) throw new Error('The wallet did not return a Stacks address.');
-      setAddress(stx.address);
-      window.localStorage.setItem(connectedAddressKey, stx.address);
+      const response = await connect({ forceWalletSelect: true, approvedProviderIds: approvedWalletProviderIds }).finally(stopWalletThemeObserver);
+      const stxAddress = readStacksAddress(response);
+      if (!stxAddress) throw new Error('The wallet did not return a Stacks address.');
+      setAddress(stxAddress);
+      window.localStorage.setItem(connectedAddressKey, stxAddress);
     } catch (caught) {
       setError(messageFrom(caught));
     } finally {
@@ -146,12 +144,6 @@ export function OperatorRegistration() {
 
 function isAscii(value: string): boolean {
   return /^[\x20-\x7e]*$/.test(value);
-}
-
-function readAddresses(response: unknown): WalletAddress[] {
-  if (!isRecord(response)) return [];
-  const result = isRecord(response.result) ? response.result : response;
-  return Array.isArray(result.addresses) ? result.addresses as WalletAddress[] : [];
 }
 
 function readTxid(response: unknown): string {
