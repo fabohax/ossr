@@ -9,7 +9,11 @@ let serviceState;
 
 function badge(id, label, kind) { const el=$(id); el.textContent=label; el.className=`badge ${kind}`; }
 function value(id, next, fallback='—') { $(id).textContent = next ?? fallback; }
-function formatNumber(next) { return next == null ? '—' : Number(next).toLocaleString(); }
+function formatNumber(next) {
+  if (next == null) return '—';
+  if (typeof next === 'string' && /^-?\d+$/.test(next)) return BigInt(next).toLocaleString();
+  return Number(next).toLocaleString();
+}
 function formatUptime(seconds) { if(seconds==null)return '— uptime'; const h=Math.floor(seconds/3600); const d=Math.floor(h/24); return d ? `${d}d ${h%24}h uptime` : `${h}h uptime`; }
 function setNotice(message) { $('notice').textContent=message; $('notice').classList.toggle('hidden', !message); }
 
@@ -27,7 +31,7 @@ function render(snapshot) {
   const synced=snapshot.node.fullySynced===true; badge('sync-badge',synced?'SYNCED':nodeGood?'SYNCING':'UNKNOWN',synced?'good':nodeGood?'warn':'bad'); value('sync-state',synced?'Fully synchronized':nodeGood?'Synchronization in progress':'Cannot determine sync'); value('sync-detail',snapshot.node.referenceTipHeight==null?'Public reference unavailable':`Public tip ${formatNumber(snapshot.node.referenceTipHeight)}`); value('blocks-behind',formatNumber(snapshot.node.blocksBehind));
   value('network',snapshot.relay.network||'Testnet'); value('relay-id',snapshot.relay.relayId); value('sponsor',snapshot.relay.sponsorPrincipal); value('balance',snapshot.relay.sponsorBalanceMicroStx==null?null:`${(Number(snapshot.relay.sponsorBalanceMicroStx)/1e6).toLocaleString(undefined,{maximumFractionDigits:6})} STX`);
   value('quotes',snapshot.relay.quotesEnabled==null?null:snapshot.relay.quotesEnabled?'Enabled':'Disabled'); value('sponsorships',snapshot.relay.sponsorshipsEnabled==null?null:snapshot.relay.sponsorshipsEnabled?'Enabled':'Disabled'); badge('readiness',ready?'READY':'NOT READY',ready?'good':'bad');
-  value('uptime',formatUptime(snapshot.relay.uptimeSeconds)); value('requests',formatNumber(snapshot.relay.requestsTotal)); value('broadcasts',formatNumber(snapshot.relay.broadcasts)); value('confirmations',formatNumber(snapshot.relay.confirmations)); value('rejections',formatNumber(snapshot.relay.rejections));
+  value('uptime',formatUptime(snapshot.relay.uptimeSeconds)); value('requests',formatNumber(snapshot.relay.requestsTotal)); value('broadcasts',formatNumber(snapshot.relay.broadcasts)); value('confirmations',formatNumber(snapshot.relay.confirmations)); value('rejections',formatNumber(snapshot.relay.rejections)); value('sats-earned',snapshot.relay.satsEarned==null?null:`${formatNumber(snapshot.relay.satsEarned)} sats`);
   const total=(snapshot.relay.broadcasts||0)+(snapshot.relay.rejections||0); $('success-bar').style.width=total?`${Math.round(100*(snapshot.relay.broadcasts||0)/total)}%`:'0';
 }
 

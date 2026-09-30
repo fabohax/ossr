@@ -34,6 +34,7 @@ pub struct RelaySummary {
     pub broadcasts: Option<u64>,
     pub confirmations: Option<u64>,
     pub rejections: Option<u64>,
+    pub sats_earned: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -145,6 +146,7 @@ impl Monitor {
                 broadcasts: nested_u64(&metrics.body, &["sponsorships", "broadcasts"]),
                 confirmations: nested_u64(&metrics.body, &["sponsorships", "confirmations"]),
                 rejections: nested_u64(&metrics.body, &["sponsorships", "rejections"]),
+                sats_earned: nested_string(&metrics.body, &["costs", "satsReimbursed"]),
             },
             node: NodeSummary {
                 health: node_health,
@@ -296,10 +298,17 @@ mod tests {
 
     #[test]
     fn nested_values_are_optional() {
-        let value = serde_json::json!({"operator": {"balanceMicroStx": "42"}});
+        let value = serde_json::json!({
+            "operator": {"balanceMicroStx": "42"},
+            "costs": {"satsReimbursed": "1250"}
+        });
         assert_eq!(
             nested_string(&value, &["operator", "balanceMicroStx"]),
             Some("42".into())
+        );
+        assert_eq!(
+            nested_string(&value, &["costs", "satsReimbursed"]),
+            Some("1250".into())
         );
         assert_eq!(nested_u64(&value, &["operator", "missing"]), None);
     }
