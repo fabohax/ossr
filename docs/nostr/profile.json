@@ -1,0 +1,19 @@
+{
+  "npub": "npub1qwfn9nmjysrycvn3xzqjvxucvgn9y83enl0p8lc5czv65l6szyrqmx8pkm",
+  "pubkey": "039332cf7224064c32713081261b986226521e399fde13ff14c099aa7f501106",
+  "url": "https://njump.me/npub1qwfn9nmjysrycvn3xzqjvxucvgn9y83enl0p8lc5czv65l6szyrqmx8pkm",
+  "profile": {
+    "name": "OSSR",
+    "display_name": "OSSR — Open Stacks Sponsor Relay",
+    "about": "Open-source Stacks transaction sponsorship relay. Send sBTC without holding STX: relay operators pay network fees in STX and receive atomic reimbursement in sats. Stacks testnet prototype. Built for the plebs.\n\nCode: https://github.com/ossr-protocol/ossr\nDocs: https://github.com/ossr-protocol/ossr#readme\nRun a relay: https://github.com/ossr-protocol/ossr/tree/main/apps/operator",
+    "picture": "https://raw.githubusercontent.com/ossr-protocol/ossr/main/ossr-a.png",
+    "website": "https://github.com/ossr-protocol/ossr",
+    "bot": false
+  },
+  "relays": [
+    "wss://relay.damus.io",
+    "wss://nos.lol",
+    "wss://relay.primal.net"
+  ],
+  "firstPost": "https://njump.me/note1u9yrdugp7jc7p7l8uh0rjd2f27gl2krxrczun9s8s9vlahnhqruqx2cy54"
+}

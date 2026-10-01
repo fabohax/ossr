@@ -1,0 +1,59 @@
+[
+  {
+    "kind": 0,
+    "created_at": 1790890005,
+    "tags": [],
+    "content": "{\"name\":\"OSSR\",\"display_name\":\"OSSR — Open Stacks Sponsor Relay\",\"about\":\"Open-source Stacks transaction sponsorship relay. Send sBTC without holding STX: relay operators pay network fees in STX and receive atomic reimbursement in sats. Stacks testnet prototype. Built for the plebs.\\n\\nCode: https://github.com/ossr-protocol/ossr\\nDocs: https://github.com/ossr-protocol/ossr#readme\\nRun a relay: https://github.com/ossr-protocol/ossr/tree/main/apps/operator\",\"picture\":\"https://raw.githubusercontent.com/ossr-protocol/ossr/main/ossr-a.png\",\"website\":\"https://github.com/ossr-protocol/ossr\",\"bot\":false}",
+    "pubkey": "039332cf7224064c32713081261b986226521e399fde13ff14c099aa7f501106",
+    "id": "ec384f310fba849951bdb558a5a92adfd12e75b4867474d0c40ca4fd95c8064f",
+    "sig": "fe0e600806d37379c3cfaa336451de2178633422da2193cccc20d3c27c10bda89ff61fc3672a1a365cf87244468a97b6cdcc25ab38864b38afcf8d5649fad8ac"
+  },
+  {
+    "kind": 10002,
+    "created_at": 1790870523,
+    "tags": [
+      [
+        "r",
+        "wss://relay.damus.io"
+      ],
+      [
+        "r",
+        "wss://nos.lol"
+      ],
+      [
+        "r",
+        "wss://relay.primal.net"
+      ]
+    ],
+    "content": "",
+    "pubkey": "039332cf7224064c32713081261b986226521e399fde13ff14c099aa7f501106",
+    "id": "de74ed295089c0d958dc3928bc5ee750df1add0cdb37e888d97175e77a4c4ac6",
+    "sig": "9e53dfbc0270f0e87d35189baa8c374ad62dca45240eac22b45a1b346a3345812769e254e6cd1acff6438488aa49169da2b6486ff44dc87b29b2196c21b3615d"
+  },
+  {
+    "kind": 1,
+    "created_at": 1790870523,
+    "tags": [
+      [
+        "t",
+        "stacks"
+      ],
+      [
+        "t",
+        "sbtc"
+      ],
+      [
+        "t",
+        "bitcoin"
+      ],
+      [
+        "t",
+        "opensource"
+      ]
+    ],
+    "content": "Introducing Open Stacks Sponsor Relay (OSSR).\n\nSend sBTC on Stacks without first acquiring STX. You sign the transfer; a relay pays the STX network fee and receives reimbursement in sats, atomically in the same transaction.\n\nOur open-source testnet prototype demonstrates sponsored sBTC transfers with a zero-STX user. We're building toward an open network of independent operators.\n\nExplore the code, run a relay, or help integrate a wallet:\nhttps://github.com/ossr-protocol/ossr\n\nDocumentation: https://github.com/ossr-protocol/ossr#readme\n\nTestnet proof of concept; not a mainnet release.\n\n#Stacks #sBTC #Bitcoin #OpenSource",
+    "pubkey": "039332cf7224064c32713081261b986226521e399fde13ff14c099aa7f501106",
+    "id": "e14836f101f4b1e0fbe7e5de3935495791f558661e05c996078159fede7700f8",
+    "sig": "f08fcf1c3688019cc924904835b5b46b033156311389088a343c1954fb25776beefb315656a1f2629a6082efe15964ba4e652f44fcfefcb88814037800d2c313"
+  }
+]

@@ -22,12 +22,15 @@
   <a href="docs/PREGRANT-DEMO.md">Demo guide</a> ·
   <a href="docs/TESTNET-DEPLOYMENT.md">Testnet evidence</a> ·
   <a href="apps/operator-desktop/README.md">Operator desktop</a> ·
-  <a href="docs/PREGRANT-LIMITATIONS.md">Limitations</a>
+  <a href="docs/PREGRANT-LIMITATIONS.md">Limitations</a> ·
+  <a href="https://njump.me/npub1qwfn9nmjysrycvn3xzqjvxucvgn9y83enl0p8lc5czv65l6szyrqmx8pkm">Nostr</a>
 </p>
 
 ---
 
 Open Stacks Sponsor Relay is an open-source, multi-operator network that lets users execute Stacks transactions without holding STX. Independent relayers pay the network fee in STX and receive reimbursement in a supported token. The first PoC uses sBTC; future adapters could support other assets.
+
+Follow the [OSSR Nostr profile](https://njump.me/npub1qwfn9nmjysrycvn3xzqjvxucvgn9y83enl0p8lc5czv65l6szyrqmx8pkm). Profile credentials and publication instructions are documented in [docs/NOSTR.md](docs/NOSTR.md).
 
 ## 1. Executive summary
 

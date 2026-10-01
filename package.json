@@ -29,7 +29,8 @@
     "test:relay-policy": "tsx apps/operator/src/api.test.ts",
     "test:quote-store": "tsx apps/operator/src/quote-store.test.ts",
     "test:simulation-response": "tsx apps/operator/src/simulation-response.test.ts",
-    "test:nonce-store": "tsx apps/operator/src/nonce-store.test.ts"
+    "test:nonce-store": "tsx apps/operator/src/nonce-store.test.ts",
+    "nostr:publish": "node scripts/nostr-publish.mjs"
   },
   "dependencies": {
     "@stacks/transactions": "^7.6.0",
@@ -38,6 +39,7 @@
   "devDependencies": {
     "@stacks/clarinet-sdk": "^3.23.1",
     "@types/node": "^26.2.0",
+    "nostr-tools": "^2.25.2",
     "tsx": "^4.23.11",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",

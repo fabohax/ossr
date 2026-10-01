@@ -1,4 +1,5 @@
 import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
+import { nostrProfileUrl } from './social';
 
 export function baseOptions(): BaseLayoutProps {
   return {
@@ -10,6 +11,7 @@ export function baseOptions(): BaseLayoutProps {
       { text: 'Main page', url: '/' },
       { text: 'Developers', url: '/developers' },
       { text: 'Operators', url: '/operators' },
+      { text: 'Nostr', url: nostrProfileUrl, external: true },
     ],
     githubUrl: 'https://github.com/OSSR-protocol',
     themeSwitch: { enabled: false },

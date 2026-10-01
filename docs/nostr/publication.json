@@ -1,0 +1,47 @@
+{
+  "checkedAt": "2026-10-01T21:26:47.840Z",
+  "results": [
+    {
+      "relay": "wss://relay.damus.io",
+      "accepted": [
+        "ec384f310fba849951bdb558a5a92adfd12e75b4867474d0c40ca4fd95c8064f",
+        "de74ed295089c0d958dc3928bc5ee750df1add0cdb37e888d97175e77a4c4ac6",
+        "e14836f101f4b1e0fbe7e5de3935495791f558661e05c996078159fede7700f8"
+      ],
+      "retrieved": [
+        "ec384f310fba849951bdb558a5a92adfd12e75b4867474d0c40ca4fd95c8064f",
+        "e14836f101f4b1e0fbe7e5de3935495791f558661e05c996078159fede7700f8",
+        "de74ed295089c0d958dc3928bc5ee750df1add0cdb37e888d97175e77a4c4ac6"
+      ],
+      "errors": []
+    },
+    {
+      "relay": "wss://nos.lol",
+      "accepted": [
+        "de74ed295089c0d958dc3928bc5ee750df1add0cdb37e888d97175e77a4c4ac6",
+        "e14836f101f4b1e0fbe7e5de3935495791f558661e05c996078159fede7700f8",
+        "ec384f310fba849951bdb558a5a92adfd12e75b4867474d0c40ca4fd95c8064f"
+      ],
+      "retrieved": [
+        "ec384f310fba849951bdb558a5a92adfd12e75b4867474d0c40ca4fd95c8064f",
+        "e14836f101f4b1e0fbe7e5de3935495791f558661e05c996078159fede7700f8",
+        "de74ed295089c0d958dc3928bc5ee750df1add0cdb37e888d97175e77a4c4ac6"
+      ],
+      "errors": []
+    },
+    {
+      "relay": "wss://relay.primal.net",
+      "accepted": [
+        "ec384f310fba849951bdb558a5a92adfd12e75b4867474d0c40ca4fd95c8064f",
+        "de74ed295089c0d958dc3928bc5ee750df1add0cdb37e888d97175e77a4c4ac6",
+        "e14836f101f4b1e0fbe7e5de3935495791f558661e05c996078159fede7700f8"
+      ],
+      "retrieved": [
+        "ec384f310fba849951bdb558a5a92adfd12e75b4867474d0c40ca4fd95c8064f",
+        "e14836f101f4b1e0fbe7e5de3935495791f558661e05c996078159fede7700f8",
+        "de74ed295089c0d958dc3928bc5ee750df1add0cdb37e888d97175e77a4c4ac6"
+      ],
+      "errors": []
+    }
+  ]
+}
