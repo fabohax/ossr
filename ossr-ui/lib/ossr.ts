@@ -1,4 +1,10 @@
 import {
+  AuthType,
+  createAddress,
+  deserializeTransaction,
+  addressToString,
+  PayloadType,
+  serializePostConditionWire,
   bufferCV,
   deserializeCV,
   fetchNonce,
@@ -242,13 +248,14 @@ export async function prepareUnsignedSponsoredTransaction(input: {
 export function extractRawTransaction(result: unknown): string | undefined {
   if (!isRecord(result)) return undefined;
   const nested = isRecord(result.result) ? result.result : result;
+  if (nested.txid || nested.txId) return undefined;
   const raw = nested.transaction ?? nested.txRaw ?? nested.tx_raw;
-  if (typeof raw === 'string') return raw.startsWith('0x') ? raw : `0x${raw}`;
+  if (typeof raw === 'string' && /^(?:0x)?(?:[0-9a-f]{2})+$/i.test(raw)) return raw.startsWith('0x') ? raw : `0x${raw}`;
   return undefined;
 }
 
 export function isFailedChainStatus(status: string | undefined): boolean {
-  return Boolean(status && (status.startsWith('abort_') || status === 'dropped_replace_by_fee' || status === 'not_found'));
+  return Boolean(status && (status.startsWith('abort_') || status.startsWith('dropped_')));
 }
 
 export function isTerminalChainStatus(status: string | undefined): boolean {
@@ -326,7 +333,7 @@ const ADAPTER_ERRORS: Record<number, string> = {
 };
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const response = await fetch(url, { ...init, signal: init?.signal ?? AbortSignal.timeout(15000), cache: 'no-store' });
   const body = await response.json().catch(() => null);
   if (!response.ok) {
     const envelope = isRecord(body) && isRecord(body.error) ? body.error : body;
@@ -358,9 +365,18 @@ function asContractId(principal: string): ContractIdString {
 
 function hexToBytes(hex: string): Uint8Array {
   if (!/^0x(?:[0-9a-f]{2})*$/i.test(hex)) throw new Error(`Invalid hex string: ${hex}`);
-  return Uint8Array.from(Buffer.from(hex.slice(2), 'hex'));
+  return Uint8Array.from(hex.slice(2).match(/../g) ?? [], byte => parseInt(byte, 16));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function validateSignedWalletTransaction(raw: string, call: PreparedWalletCall, origin: string): void {
+  const tx = deserializeTransaction(raw);
+  tx.verifyOrigin();
+  if (tx.auth.authType !== AuthType.Sponsored || tx.chainId !== 2147483648 || tx.auth.spendingCondition.signer !== createAddress(origin).hash160 || tx.postConditionMode !== PostConditionMode.Deny) throw new Error('Wallet returned an unexpected origin, network, or authorization.');
+  if (!('signature' in tx.auth.sponsorSpendingCondition) || !/^0+$/.test(tx.auth.sponsorSpendingCondition.signature.data)) throw new Error('Wallet must return origin-only authorization.');
+  const payload = tx.payload;
+  if (payload.payloadType !== PayloadType.ContractCall || addressToString(payload.contractAddress) !== call.contractAddress || payload.contractName.content !== call.contractName || payload.functionName.content !== call.functionName || JSON.stringify(payload.functionArgs.map(serializeCV)) !== JSON.stringify(call.functionArgs) || JSON.stringify(tx.postConditions.values.map(serializePostConditionWire)) !== JSON.stringify(call.postConditions)) throw new Error('Wallet changed the reviewed transfer or its exact post-condition.');
 }

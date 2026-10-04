@@ -14,8 +14,11 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { enableDarkStacksWalletSelector } from '@/lib/stacks-wallet-theme';
-import { approvedWalletProviderIds, connectedWalletPublicKeyKey, readStacksAccount, requiresPrebuiltSponsoredTransaction } from '@/lib/stacks-wallet';
+import { approvedWalletProviderIds, connectedWalletPublicKeyKey, readStacksAccount } from '@/lib/stacks-wallet';
+import { configuredQuoteTrust, validateIntent, verifyQuote, type TransferIntent } from '@/lib/quote-verification';
 import {
+  validateSignedWalletTransaction,
+  fetchStacksTipHeight,
   adapterErrorFromStatus,
   describeChainStatus,
   extractRawTransaction,
@@ -91,16 +94,18 @@ function defaultRelayUrl(): string {
   return `http://${window.location.hostname}:3002`;
 }
 
-function savedConnectedAddress(): string {
-  if (typeof window === 'undefined') return '';
-  return window.localStorage.getItem(connectedAddressKey) ?? '';
-}
-
 type DisplayError = { title: string; message: string; action?: string; code?: string };
 
 const errorGuidance: Record<string, Pick<DisplayError, 'title' | 'action'>> = {
+  SIMULATION_UNAVAILABLE: { title: 'Simulation unavailable', action: 'No broadcast was approved. Wait and request a fresh quote.' },
+  SIMULATION_STALE: { title: 'Simulation is stale', action: 'No broadcast was approved. Request a fresh quote later.' },
+  SIMULATION_INVALID_RESPONSE: { title: 'Simulation could not be verified', action: 'No broadcast was approved. Wait for the relay to recover.' },
+  INSUFFICIENT_STX: { title: 'Sponsor needs testnet STX', action: 'The operator must fund the sponsor before you request a new quote.' },
+  BROADCAST_FAILED: { title: 'Broadcast failed', action: 'Check relay status and the explorer before attempting another transfer.' },
   QUOTE_EXPIRED: { title: 'This quote has expired', action: 'Go back and request a fresh quote, then approve it promptly.' },
-  QUOTE_ALREADY_USED: { title: 'This quote was already used', action: 'Go back and request a new quote.' },
+  QUOTE_ALREADY_USED: { title: 'This quote was already used', action: 'Check the existing transaction before starting another transfer.' },
+  QUOTE_REQUEST_MISMATCH: { title: 'Quote retry does not match', action: 'Check the existing request outcome before creating another transfer.' },
+  QUOTE_NOT_FOUND: { title: 'Quote unavailable', action: 'Request a fresh quote before signing.' },
   QUOTE_ORIGIN_MISMATCH: { title: 'The connected wallet changed', action: 'Reconnect the wallet that requested this quote, or request a new quote.' },
   ORIGIN_MISMATCH: { title: 'The signing wallet does not match', action: 'Reconnect the wallet shown in the transfer details and try again.' },
   INVALID_ORIGIN_SIGNATURE: { title: 'The wallet signature could not be verified', action: 'Reject any pending wallet request, then approve the transaction again.' },
@@ -123,8 +128,9 @@ function displayError(error: unknown): DisplayError {
       code: [error.code, `HTTP ${error.status}`].filter(Boolean).join(' · '),
     };
   }
+  if (error instanceof DOMException && error.name === 'TimeoutError') return { title: 'Request timed out', message: 'If submission was in progress, the transaction may already be broadcast. Check the relay and explorer before another transfer.' };
   if (error instanceof TypeError && /fetch|network|failed/i.test(error.message)) {
-    return { title: 'The relay could not be reached', message: 'The relay may be offline or blocked by your network.', action: 'Check the relay endpoint and your connection, then try again. For local testing, clone the repository and run the relay locally.' };
+    return { title: 'The relay could not be reached', message: 'The relay may be offline or blocked by your network.', action: 'If this happened during submission, the transaction may already be broadcast. Check relay status before requesting another transfer.' };
   }
   return {
     title: 'We couldn\'t complete that request',
@@ -133,9 +139,13 @@ function displayError(error: unknown): DisplayError {
 }
 
 export default function Home({ embedded = false, onWalletChange }: { embedded?: boolean; onWalletChange?: (address: string) => void }) {
+  const [receipt, setReceipt] = useState<{ response: SponsorshipResponse; intent: TransferIntent; quote: QuoteResponse }>();
+  const [reviewedIntent, setReviewedIntent] = useState<TransferIntent>();
+  const [tipHeight, setTipHeight] = useState<number>();
+  const intentRef = useRef('');
   const [relayUrl, setRelayUrl] = useState(defaultRelayUrl);
   const [relayInfo, setRelayInfo] = useState<RelayInfo>();
-  const [origin, setOrigin] = useState(savedConnectedAddress);
+  const [origin, setOrigin] = useState('');
   const [recipient, setRecipient] = useState('');
   const [recentRecipients, setRecentRecipients] = useState(savedRecentRecipients);
   const [amountSats, setAmountSats] = useState('');
@@ -189,7 +199,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
   }, [estimatedTotalSats, sbtcBalance]);
 
   const txid = sponsorship?.transactionId ?? sponsorship?.transaction_id;
-  const statusNeedsConfirmation = status?.status === 'dropped_replace_by_fee' || status?.status === 'not_found';
+  const statusNeedsConfirmation = Boolean(status?.status.startsWith('dropped_'));
   const provisionalStatus = Boolean(statusNeedsConfirmation && statusObservationCount < 3);
   const failed = isFailedChainStatus(status?.status) && !provisionalStatus;
   const terminal = isTerminalChainStatus(status?.status) && !provisionalStatus;
@@ -201,21 +211,55 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
     return info;
   }
 
+  const currentIntent: TransferIntent = { relayUrl, origin, recipient, amountSats, maxSponsorFeeSats, ...(memo ? { memo: normalizeMemo(memo) } : {}) };
+  const intentKey = JSON.stringify(currentIntent);
+  intentRef.current = intentKey;
+  const fieldErrors = validateIntent(currentIntent);
+  useEffect(() => { setQuoteResponse(undefined); setReviewedIntent(undefined); }, [intentKey]);
+
   useEffect(() => {
-    const hydrateSavedAddress = () => {
-      const saved = window.localStorage.getItem(connectedAddressKey);
-      if (saved && !origin) setOrigin(saved);
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const { isConnected, request } = await import('@stacks/connect');
+        const account = isConnected() ? readStacksAccount(await request({ enableLocalStorage: false }, 'stx_getAddresses')) : undefined;
+        if (!cancelled) {
+          const address = account?.address && /^(ST|SN)/.test(account.address) ? account.address : '';
+          setOrigin(address);
+          if (account?.publicKey) window.localStorage.setItem(connectedWalletPublicKeyKey, account.publicKey);
+          else window.localStorage.removeItem(connectedWalletPublicKeyKey);
+          onWalletChange?.(address);
+        }
+      } catch { if (!cancelled) setOrigin(''); }
     };
-    hydrateSavedAddress();
-    const interval = window.setInterval(hydrateSavedAddress, 500);
-    window.addEventListener('focus', hydrateSavedAddress);
-    document.addEventListener('visibilitychange', hydrateSavedAddress);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener('focus', hydrateSavedAddress);
-      document.removeEventListener('visibilitychange', hydrateSavedAddress);
+    void refresh();
+    window.addEventListener('focus', refresh);
+    window.addEventListener('storage', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { cancelled = true; window.removeEventListener('focus', refresh); window.removeEventListener('storage', refresh); document.removeEventListener('visibilitychange', refresh); };
+  }, [onWalletChange]);
+
+  useEffect(() => {
+    if (!quoteResponse) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try { const height = await fetchStacksTipHeight(); if (!cancelled) setTipHeight(height); }
+      catch { if (!cancelled) setTipHeight(undefined); }
     };
-  }, [origin]);
+    void refresh();
+    const timer = window.setInterval(refresh, 10000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [quoteResponse]);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('ossr-ui:submitted-transfer') ?? 'null');
+      if (saved && /^(?:0x)?[0-9a-f]{64}$/i.test(saved.response?.transaction_id) && saved.intent && !Object.keys(validateIntent(saved.intent)).length && saved.quote?.quote && /^[0-9]+$/.test(saved.quote.quote.sponsorFee)) {
+        setReceipt(saved);
+        setSponsorship(saved.response);
+      }
+    } catch { /* Corrupt local receipt cannot initiate a submission. */ }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -271,6 +315,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
       setSbtcBalance(undefined);
       return;
     }
+    setSbtcBalance(undefined);
     window.localStorage.setItem(connectedAddressKey, origin);
     let cancelled = false;
     const refresh = async () => {
@@ -293,9 +338,11 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
     if (!txid) return;
     if (terminal) return;
     let cancelled = false;
+    const startedAt = Date.now();
     const poll = async () => {
+      if (Date.now() - startedAt > 15 * 60 * 1000) setError({ title: 'Confirmation is taking longer than expected', message: 'Your transaction may still confirm. Follow the explorer link; do not resubmit to retry confirmation.' });
       try {
-        const next = await fetchSponsorshipStatus(relayUrl, txid);
+        const next = await fetchSponsorshipStatus(receipt?.intent.relayUrl ?? relayUrl, txid);
         if (!cancelled) {
           const observed = statusObservation.current;
           const count = observed.value === next.status ? observed.count + 1 : 1;
@@ -304,7 +351,8 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
           setStatus(next);
         }
       } catch {
-        // Status polling is best-effort; submit errors are shown in the main flow.
+        if (!cancelled) setError({ title: 'Confirmation unavailable', message: 'This transaction may already be broadcast. Use its explorer link; do not resubmit to retry confirmation.' });
+        // Keep the saved receipt visible while the relay is unavailable.
       }
     };
     void poll();
@@ -313,7 +361,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [relayUrl, txid, terminal]);
+  }, [relayUrl, receipt, txid, terminal]);
 
   useEffect(() => {
     if (!terminal) return;
@@ -339,8 +387,6 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
     setOrigin('');
     setSbtcBalance(undefined);
     setQuoteResponse(undefined);
-    setSponsorship(undefined);
-    setStatus(undefined);
     onWalletChange?.('');
   }
 
@@ -354,7 +400,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
       const stopWalletThemeObserver = enableDarkStacksWalletSelector();
       const response = await connect({ forceWalletSelect: true, approvedProviderIds: approvedWalletProviderIds }).finally(stopWalletThemeObserver);
       const account = readStacksAccount(response);
-      if (!account?.address) throw new Error('Wallet did not return a Stacks address.');
+      if (!account?.address || !/^(ST|SN)/.test(account.address)) throw new Error('Switch your wallet to Stacks testnet and reconnect.');
       setOrigin(account.address);
       window.localStorage.setItem(connectedAddressKey, account.address);
       if (account.publicKey) window.localStorage.setItem(connectedWalletPublicKeyKey, account.publicKey);
@@ -370,52 +416,26 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
   }
 
   async function createQuote() {
-    const quote = await run('quote', async () => {
-      // Refresh cost inputs immediately before requesting the signed quote so
-      // the wallet approval never relies only on the periodic preview.
-      const latestInfo = await fetchRelayInfo(relayUrl);
-      setRelayInfo(latestInfo);
-      const latestMaximumFee = estimatedSponsorFee(BigInt(amountSats), latestInfo.limits).toString();
-      setMaxSponsorFeeSats(latestMaximumFee);
-      const quote = await requestQuote({
-        relayUrl,
-        origin,
-        recipient,
-        amountSats,
-        maxSponsorFeeSats: latestMaximumFee,
-        ...(memo.trim() ? { memo: normalizeMemo(memo) } : {}),
-      });
-      setQuoteResponse(quote);
-      setSponsorship(undefined);
-      setStatus(undefined);
-      statusObservation.current = { value: '', count: 0 };
-      setStatusObservationCount(0);
-      return quote;
+    await run('quote', async () => {
+      if (Object.keys(fieldErrors).length) throw new Error('Correct the transfer fields first.');
+      const snapshot = { ...currentIntent };
+      const key = JSON.stringify(snapshot);
+      const trust = configuredQuoteTrust();
+      const [quote, height, balance] = await Promise.all([requestQuote(snapshot), fetchStacksTipHeight(), fetchSbtcBalance(snapshot.origin, trust.sbtcContract)]);
+      verifyQuote(quote, snapshot, trust, height, balance.balanceSats);
+      if (intentRef.current !== key) throw new Error('Transfer changed while requesting the quote. Request a fresh quote.');
+      setReviewedIntent(snapshot); setQuoteResponse(quote); setTipHeight(height); setSbtcBalance(balance);
+      setSponsorship(undefined); setStatus(undefined);
+      const updatedRecipients = [snapshot.recipient, ...recentRecipients.filter(address => address !== snapshot.recipient)].slice(0, 5);
+      setRecentRecipients(updatedRecipients); window.localStorage.setItem(recentRecipientsKey, JSON.stringify(updatedRecipients));
     });
-    if (quote) {
-      const updatedRecipients = [recipient, ...recentRecipients.filter(address => address !== recipient)].slice(0, 5);
-      setRecentRecipients(updatedRecipients);
-      window.localStorage.setItem(recentRecipientsKey, JSON.stringify(updatedRecipients));
-      await signAndSubmit(quote);
-    }
-  }
-
-  async function replaceObsoleteQuote(): Promise<QuoteResponse> {
-    const freshQuote = await requestQuote({
-      relayUrl,
-      origin,
-      recipient,
-      amountSats,
-      maxSponsorFeeSats,
-      ...(memo.trim() ? { memo: normalizeMemo(memo) } : {}),
-    });
-    setQuoteResponse(freshQuote);
-    return freshQuote;
   }
 
   function resetForNewQuote() {
     setTransactionModalOpen(false);
     setQuoteResponse(undefined);
+    setReceipt(undefined);
+    window.localStorage.removeItem('ossr-ui:submitted-transfer');
     setSponsorship(undefined);
     setStatus(undefined);
     statusObservation.current = { value: '', count: 0 };
@@ -434,55 +454,57 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
   async function signAndSubmit(quoteToSubmit = quoteResponse) {
     await run('submit', async () => {
       if (!quoteToSubmit) throw new Error('Request a quote first.');
+      if (!reviewedIntent || intentRef.current !== JSON.stringify(reviewedIntent)) throw new Error('Transfer changed. Request a fresh quote.');
+      const snapshot = reviewedIntent;
       const { getSelectedProviderId, request } = await import('@stacks/connect');
+      if (!approvedWalletProviderIds.includes(getSelectedProviderId() ?? '')) throw new Error('Use Leather or Xverse for origin-only sponsored signing.');
+      const account = readStacksAccount(await request({ enableLocalStorage: false }, 'stx_getAddresses'));
+      if (account?.address !== snapshot.origin) { setOrigin(account?.address ?? ''); throw new Error('Wallet account changed. Request a fresh quote.'); }
+      const trust = configuredQuoteTrust();
+      const [height, balance] = await Promise.all([fetchStacksTipHeight(), fetchSbtcBalance(snapshot.origin, trust.sbtcContract)]);
+      verifyQuote(quoteToSubmit, snapshot, trust, height, balance.balanceSats);
+
       const prepared = prepareWalletContractCall({
         quote: quoteToSubmit.quote,
-        recipient,
-        amountSats,
-        ...(memo.trim() ? { memo: normalizeMemo(memo) } : {}),
+        recipient: snapshot.recipient,
+        amountSats: snapshot.amountSats,
+        ...(snapshot.memo !== undefined ? { memo: snapshot.memo } : {}),
       });
-      const walletResult = requiresPrebuiltSponsoredTransaction(getSelectedProviderId())
-        ? await signPreparedTransactionWithCompatibleWallet(prepared, origin)
-        : await request('stx_callContract', {
-            contract: prepared.contract,
-            functionName: prepared.functionName,
-            functionArgs: prepared.functionArgs,
-            postConditions: prepared.postConditions,
-            postConditionMode: prepared.postConditionMode,
-            sponsored: true,
-            network: 'testnet',
-          });
+      if (!account.publicKey) throw new Error('Wallet did not provide its Stacks public key. Reconnect with Leather or Xverse.');
+      window.localStorage.setItem(connectedWalletPublicKeyKey, account.publicKey);
+      const walletResult = await signPreparedTransactionWithCompatibleWallet(prepared, snapshot.origin);
       const transaction = extractRawTransaction(walletResult);
       if (!transaction) throw new Error('Wallet did not return raw signed transaction bytes. This wallet may only support sign-and-broadcast contract calls.');
+      validateSignedWalletTransaction(transaction, prepared, snapshot.origin);
+      if (intentRef.current !== JSON.stringify(snapshot) || readStacksAccount(await request({ enableLocalStorage: false }, 'stx_getAddresses'))?.address !== snapshot.origin) throw new Error('Wallet or transfer changed during signing. Request a fresh quote.');
+      const [submissionHeight, submissionBalance] = await Promise.all([fetchStacksTipHeight(), fetchSbtcBalance(snapshot.origin, trust.sbtcContract)]);
+      verifyQuote(quoteToSubmit, snapshot, trust, submissionHeight, submissionBalance.balanceSats);
       let response: SponsorshipResponse;
       try {
         response = await submitSponsorship({
           relayUrl,
           quoteId: quoteToSubmit.quote.quoteId,
           transaction,
-          user: origin,
+          user: snapshot.origin,
         });
       } catch (caught) {
         const obsoleteQuote = caught instanceof RelayRequestError
-          && ['QUOTE_EXPIRED', 'QUOTE_NOT_FOUND', 'QUOTE_ALREADY_USED'].includes(caught.code ?? '');
+          && ['QUOTE_EXPIRED', 'QUOTE_NOT_FOUND'].includes(caught.code ?? '');
         if (!obsoleteQuote) throw caught;
-        const freshQuote = await replaceObsoleteQuote();
-        setError({
-          title: 'Your quote was refreshed',
-          message: 'The previous quote became obsolete before it could be submitted.',
-          action: `Review the updated ${freshQuote.quote.sponsorFee} sat sponsor fee, then approve again in your wallet.`,
-          code: caught.code,
-        });
-        return;
+        setQuoteResponse(undefined);
+        throw new Error('The quote is obsolete. Request a fresh quote; no automatic resubmission was attempted.');
       }
       statusObservation.current = { value: '', count: 0 };
       setStatusObservationCount(0);
+      const saved = { response, intent: snapshot, quote: quoteToSubmit };
+      setReceipt(saved);
       setSponsorship(response);
       setTransactionModalOpen(true);
+      try { window.localStorage.setItem('ossr-ui:submitted-transfer', JSON.stringify(saved)); } catch { setError({ title: 'Transaction broadcast', message: 'Browser storage is unavailable. Save the explorer link before refreshing.' }); }
     });
   }
 
-  const canQuote = Boolean(origin && recipient && amountSats && maxSponsorFeeSats && memoByteLength <= 34 && !insufficientBalance);
+  const canQuote = Boolean(origin && sbtcBalance?.address === origin && !Object.keys(fieldErrors).length && !insufficientBalance);
   return (
     <main className={embedded ? 'bg-background text-foreground' : 'min-h-screen bg-background text-foreground'}>
       <div className={embedded ? 'mx-auto flex w-full flex-col' : 'mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 pt-5 pb-72 sm:px-6 sm:pb-44 lg:px-8 lg:pt-8 lg:pb-32'}>
@@ -654,9 +676,18 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                 ) : (
                   <Button size="lg" type="submit" disabled={!canQuote || Boolean(busy)} className="h-18 w-full text-lg">
                     {busy === 'quote' || busy === 'submit' ? <Loader2 className="animate-spin" /> : <ArrowRight />}
-                    {busy === 'quote' ? 'Preparing approval…' : busy === 'submit' ? 'Waiting for wallet…' : 'Continue in wallet'}
+                    {busy === 'quote' ? 'Verifying quote…' : busy === 'submit' ? 'Waiting for wallet…' : 'Review transfer'}
                   </Button>
                 )}
+                {Object.entries(fieldErrors).filter(([field]) => currentIntent[field as keyof TransferIntent]).map(([field, message]) => <p key={field} role="alert" className="text-sm text-destructive">{field}: {message}</p>)}
+                {quoteResponse && reviewedIntent ? <div className="grid gap-3 rounded-lg border p-4" aria-live="polite">
+                  <p>Testnet · From {reviewedIntent.origin} to {reviewedIntent.recipient}</p>
+                  <p>Relay: {reviewedIntent.relayUrl}. Maximum sponsor fee: {reviewedIntent.maxSponsorFeeSats} sats. Memo bytes: {reviewedIntent.memo ?? 'none'}.</p>
+                  <p>{reviewedIntent.amountSats} sats + {quoteResponse.quote.sponsorFee} sats sponsor fee. Maximum outflow: {totalSats} sats. Sponsor pays STX.</p>
+                  <p>{tipHeight === undefined ? 'Chain height unavailable; signing disabled.' : `${Math.max(0, Number(quoteResponse.quote.expiresAtBlock) - tipHeight)} blocks remaining`}</p>
+                  <Button type="button" disabled={Boolean(busy) || tipHeight === undefined || BigInt(quoteResponse.quote.expiresAtBlock) <= BigInt(tipHeight)} onClick={() => void signAndSubmit()}>Approve reviewed transfer in wallet</Button>
+                </div> : null}
+                {receipt ? <div className="grid gap-2 rounded-lg border p-4"><p>Submitted transfer: {receipt.intent.amountSats} sats · {status?.status ?? 'Broadcast'}</p><TransactionId txid={txid} successful={false} /><Button type="button" variant="outline" onClick={() => setTransactionModalOpen(true)}>View submitted transfer</Button></div> : null}
               </form>
             </CardContent>
           </Card>
@@ -675,8 +706,8 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                   <DialogDescription id="transaction-modal-description">Your sponsored sBTC transfer has confirmed on Stacks testnet.</DialogDescription>
                 </DialogHeader>
                 <dl className="w-full rounded-lg border bg-muted/30 p-4 text-sm">
-                  <ReviewRow label="Amount" value={`${amountSats} sats`} emphasized />
-                  <ReviewRow label="Fee" value={`${quoteResponse?.quote.sponsorFee ?? '—'} sats`} />
+                  <ReviewRow label="Amount" value={`${receipt?.intent.amountSats ?? amountSats} sats`} emphasized />
+                  <ReviewRow label="Fee" value={`${(receipt?.quote ?? quoteResponse)?.quote.sponsorFee ?? '—'} sats`} />
                   <ReviewRow label="Transaction" valueNode={<TransactionId txid={txid} successful />} />
                   <ReviewRow label="Block height" value={status.blockHeight?.toString() ?? '—'} mono />
                 </dl>
@@ -693,17 +724,17 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
 
                 <div className="grid gap-5 px-5 py-2 sm:px-6">
                   <div className="flex items-center justify-between rounded-lg border bg-primary/5 px-4 py-3">
-                    <div><p className="text-xs text-muted-foreground">Amount</p><p className="mt-1 font-mono text-xl font-semibold">{amountSats} sats</p></div>
+                    <div><p className="text-xs text-muted-foreground">Amount</p><p className="mt-1 font-mono text-xl font-semibold">{receipt?.intent.amountSats ?? amountSats} sats</p></div>
                     <Badge>{provisionalStatus ? 'Rechecking status' : status?.status ?? 'Broadcast'}</Badge>
                   </div>
 
                   <dl className="grid gap-2 rounded-lg border bg-muted/30 p-4 text-sm">
-                    <ReviewRow label="Sponsor fee" value={quoteResponse ? `${quoteResponse.quote.sponsorFee} sats` : '—'} />
-                    <ReviewRow label="Maximum outflow" value={totalSats ? `${totalSats} sats` : '—'} emphasized />
+                    <ReviewRow label="Sponsor fee" value={(receipt?.quote ?? quoteResponse) ? `${(receipt?.quote ?? quoteResponse)!.quote.sponsorFee} sats` : '—'} />
+                    <ReviewRow label="Maximum outflow" value={receipt ? `${BigInt(receipt.intent.amountSats) + BigInt(receipt.quote.quote.sponsorFee)} sats` : totalSats ? `${totalSats} sats` : '—'} emphasized />
                     <Separator className="my-1" />
-                    <ReviewRow label="To" value={compact(recipient, 10)} mono />
-                    <ReviewRow label="Sponsor" value={quoteResponse ? compact(quoteResponse.quote.sponsorPrincipal, 10) : '—'} mono />
-                    <ReviewRow label="Expires at block" value={quoteResponse?.quote.expiresAtBlock ?? '—'} mono />
+                    <ReviewRow label="To" value={compact(receipt?.intent.recipient ?? recipient, 10)} mono />
+                    <ReviewRow label="Sponsor" value={(receipt?.quote ?? quoteResponse) ? compact((receipt?.quote ?? quoteResponse)!.quote.sponsorPrincipal, 10) : '—'} mono />
+                    <ReviewRow label="Expires at block" value={(receipt?.quote ?? quoteResponse)?.quote.expiresAtBlock ?? '—'} mono />
                     <ReviewRow label="Transaction" valueNode={<TransactionId txid={txid} successful={false} />} />
                   </dl>
 
@@ -716,7 +747,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                   </div>
 
                   {error ? <ErrorAlert error={error} /> : null}
-                  {failed ? <TransactionOutcome status={status} txid={txid} failed amountSats={amountSats} sponsorFeeSats={quoteResponse?.quote.sponsorFee} origin={origin} /> : null}
+                  {failed ? <TransactionOutcome status={status} txid={txid} failed amountSats={receipt?.intent.amountSats ?? amountSats} sponsorFeeSats={(receipt?.quote ?? quoteResponse)?.quote.sponsorFee} origin={receipt?.intent.origin ?? origin} /> : null}
                 </div>
 
                 <DialogFooter className="m-0 px-5 py-4 sm:px-6">
@@ -798,7 +829,7 @@ function TransactionOutcome({
 
 function TransactionId({ txid, successful }: { txid?: string; successful: boolean }) {
   if (!txid) return '-';
-  if (!successful) return txid;
+  void successful;
   return (
     <a className="inline-flex items-center gap-1 font-mono text-primary underline-offset-4 hover:underline" href={hiroTxUrl(txid)} target="_blank" rel="noreferrer">
       {compact(txid, 12)} <ExternalLink className="size-3" />

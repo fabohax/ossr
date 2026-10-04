@@ -8,9 +8,14 @@ production build. It can discover a wallet address, request a quote, construct
 the exact sponsored adapter call and post-condition, submit origin-signed bytes,
 poll relay status, and link successful transactions to the Hiro explorer.
 
+Implementation update (October 3, 2026): browser policy and recovery changes are
+implemented and covered by local tests and a production build. Wallet extension
+compatibility and the public wallet-driven acceptance run remain open; no live
+wallet evidence is claimed. See [P0 validation and setup](P0-VALIDATION.md).
+
 ## P0 — Required for a grant demonstration
 
-- [ ] Verify relay quote signatures in the browser before constructing a wallet
+- [x] Verify relay quote signatures in the browser before constructing a wallet
       request. Pin or explicitly trust the expected quote public key, reproduce
       the protocol signing digest, reject invalid signatures, and reject an
       unexpected key ID, relay ID, network, policy version, adapter, sBTC asset,
@@ -18,24 +23,24 @@ poll relay status, and link successful transactions to the Hiro explorer.
   - Acceptance: a valid production-format quote passes; mutations to every
     signed field fail locally before the wallet opens.
 
-- [ ] Validate quote freshness against a current Stacks testnet height and show
+- [x] Validate quote freshness against a current Stacks testnet height and show
       a visible block countdown.
   - Acceptance: an expired quote cannot be signed, and the UI asks for a fresh
     quote without losing the transfer form.
 
-- [ ] Freeze the reviewed transfer intent after quote issuance. Any change to
+- [x] Freeze the reviewed transfer intent after quote issuance. Any change to
       origin, recipient, amount, maximum fee, memo, relay URL, or network must
       invalidate the quote and require a new one.
   - Acceptance: the values displayed in Review are the exact values encoded in
     the wallet request; stale form state cannot be submitted.
 
-- [ ] Add strict client-side validation for canonical testnet principals,
+- [x] Add strict client-side validation for canonical testnet principals,
       positive integer sats, memo length/encoding, recipient-not-origin, relay
       URL, and `amount + sponsor fee <= available sBTC`.
   - Acceptance: invalid input produces field-level guidance and never opens a
     wallet prompt or calls the sponsorship endpoint.
 
-- [ ] Make wallet identity authoritative. Treat the address returned by Stacks
+- [x] Make wallet identity authoritative. Treat the address returned by Stacks
       Connect as read-only, clearly show testnet, detect account/network changes,
       and invalidate dependent balance and quote state on change or disconnect.
   - Acceptance: the origin shown in the UI always matches the account that signs
@@ -48,14 +53,14 @@ poll relay status, and link successful transactions to the Hiro explorer.
     unsupported wallets receive a precise compatibility message before funds are
     at risk.
 
-- [ ] Replace generic transport errors with stable, user-facing relay errors.
+- [x] Replace generic transport errors with stable, user-facing relay errors.
       Cover quote expiry/mismatch, invalid post-conditions, stale or unavailable
       simulation, insufficient sBTC, insufficient sponsor STX, replay, and
       confirmation timeout.
   - Acceptance: messages explain whether retrying is safe and whether a
     transaction may already have been broadcast.
 
-- [ ] Make the post-submit flow durable. Persist the transaction ID and reviewed
+- [x] Make the post-submit flow durable. Persist the transaction ID and reviewed
       quote summary, resume status polling after refresh, distinguish broadcast,
       pending, confirmed, aborted, dropped, and unknown states, and always expose
       the explorer link once a transaction ID exists.

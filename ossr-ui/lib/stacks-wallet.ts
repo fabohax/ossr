@@ -24,6 +24,7 @@ export function readStacksAddress(response: unknown): string | undefined {
 export function readStacksAccount(response: unknown, expectedAddress?: string): WalletAddress | undefined {
   return readWalletAddresses(response).find(entry => (
     typeof entry.address === 'string'
+    && /^(ST|SN)/.test(entry.address)
     && (entry.symbol?.toUpperCase() === 'STX' || entry.address.startsWith('S'))
     && (!expectedAddress || entry.address === expectedAddress)
   ));
