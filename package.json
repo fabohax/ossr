@@ -28,6 +28,7 @@
     "test:registry": "tsx apps/operator/src/registry.test.ts",
     "test:relay-policy": "tsx apps/operator/src/api.test.ts",
     "test:quote-store": "tsx apps/operator/src/quote-store.test.ts",
+    "test:ui-quotes": "tsx ossr-ui/lib/quote-verification.test.ts",
     "test:simulation-response": "tsx apps/operator/src/simulation-response.test.ts",
     "test:nonce-store": "tsx apps/operator/src/nonce-store.test.ts",
     "nostr:publish": "node scripts/nostr-publish.mjs"

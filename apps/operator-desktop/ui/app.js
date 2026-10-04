@@ -6,6 +6,78 @@ const config = {
   referenceUrl: localStorage.getItem('referenceUrl') || 'https://api.testnet.hiro.so',
 };
 let serviceState;
+let activity = null;
+let activeView = 'overview';
+let activityLoading = false;
+
+function renderActivity() {
+  const body = $('activity-rows'); body.replaceChildren();
+  if (!activity) return;
+  const search = $('activity-search').value.trim().toLowerCase();
+  const entries = activity.entries.filter(entry =>
+    ($('activity-kind').value === 'all' || entry.state !== 'ISSUED') &&
+    ($('activity-state').value === 'all' || entry.state === $('activity-state').value) &&
+    [entry.quoteId, entry.transactionId, entry.origin, entry.recipient].some(value => String(value || '').toLowerCase().includes(search)));
+  value('activity-summary', `${entries.length} matching records · newest ${activity.entries.length} of ${activity.total} stored quotes`);
+  if (!entries.length) value('activity-summary', activity.total ? 'No records match these filters.' : 'No quotes or sponsorships recorded yet.');
+  for (const entry of entries) {
+    const row = document.createElement('tr');
+    const cells = [new Date(entry.updatedAt).toLocaleString(), entry.state,
+      [entry.quoteId, entry.transactionId || 'No broadcast recorded'], [entry.origin, entry.recipient],
+      [formatNumber(entry.amountSats), `Fee: ${formatNumber(entry.sponsorFeeSats)}`],
+      [entry.issuedAtBlock, `Expires: ${entry.expiresAtBlock}`]];
+    for (const content of cells) {
+      const cell = document.createElement('td');
+      if (Array.isArray(content)) content.forEach((text, index) => { const el = document.createElement(index ? 'small' : 'code'); el.textContent = text; cell.append(el); });
+      else cell.textContent = content;
+      row.append(cell);
+    }
+    body.append(row);
+  }
+}
+async function refreshActivity() {
+  if (activityLoading) return;
+  activityLoading = true;
+  try {
+    if (!invoke) throw new Error('Run this interface through the Tauri desktop application.');
+    activity = await invoke('get_activity', {relayUrl: config.relayUrl});
+    renderActivity();
+  } catch (error) { activity = null; $('activity-rows').replaceChildren(); value('activity-summary', String(error)); }
+  finally { activityLoading = false; }
+}
+function selectView(view) {
+  activeView = view;
+  setNotice('');
+  for (const name of ['overview', 'activity', 'diagnostics']) {
+    const selected = name === view;
+    $(`${name}-view`).classList.toggle('hidden', !selected);
+    $(`${name}-nav`).classList.toggle('active', selected);
+    $(`${name}-nav`).setAttribute('aria-pressed', String(selected));
+  }
+  document.querySelector('h1').textContent = {overview:'Relay control room', activity:'Relay activity', diagnostics:'Relay diagnostics'}[view];
+  document.querySelector('header .eyebrow').textContent = `OPERATIONS / ${view.toUpperCase()}`;
+  refresh();
+}
+for (const name of ['overview', 'activity', 'diagnostics']) $(`${name}-nav`).addEventListener('click', () => selectView(name));
+function renderDiagnostics(snapshot) {
+  const checks = diagnosticChecks(snapshot);
+  const failures = checks.filter(check => check.state === 'fail').length;
+  const warnings = checks.filter(check => check.state === 'warn').length;
+  value('diagnostics-summary', `${failures} failed · ${warnings} need attention · Checked ${new Date(snapshot.checkedAt).toLocaleTimeString()}`);
+  const list = $('diagnostics-checks'); list.replaceChildren();
+  for (const check of checks) {
+    const card = document.createElement('article'); card.className = 'card diagnostic-check';
+    const title = document.createElement('h3'); title.textContent = check.title;
+    const status = document.createElement('span'); status.className = `badge ${check.state === 'pass' ? 'good' : check.state === 'fail' ? 'bad' : 'warn'}`;
+    status.textContent = {pass:'PASS', fail:'FAILED', warn:'ATTENTION'}[check.state];
+    const evidence = document.createElement('p'); evidence.textContent = check.evidence;
+    const action = document.createElement('p'); action.className = 'diagnostic-action'; action.textContent = check.action;
+    card.append(title, status, evidence, action); list.append(card);
+  }
+}
+for (const id of ['activity-kind', 'activity-state']) $(id).addEventListener('change', renderActivity);
+$('activity-search').addEventListener('input', renderActivity);
+
 
 function badge(id, label, kind) { const el=$(id); el.textContent=label; el.className=`badge ${kind}`; }
 function value(id, next, fallback='—') { $(id).textContent = next ?? fallback; }
@@ -36,12 +108,15 @@ function render(snapshot) {
 }
 
 async function refresh() {
+  if (activeView === 'activity') return refreshActivity();
   $('refresh').classList.add('spin'); setNotice('');
   try {
     if (!invoke) throw new Error('Run this interface through the Tauri desktop application.');
-    render(await invoke('get_snapshot',{relayUrl:config.relayUrl,nodeUrl:config.nodeUrl,referenceUrl:config.referenceUrl}));
+    const snapshot = await invoke('get_snapshot',{relayUrl:config.relayUrl,nodeUrl:config.nodeUrl,referenceUrl:config.referenceUrl});
+    render(snapshot);
+    renderDiagnostics(snapshot);
     await refreshServices();
-  } catch(error) { setNotice(String(error)); $('overall-pill').className='pill bad'; $('overall-pill').textContent='CHECK FAILED'; }
+  } catch(error) { $('diagnostics-checks').replaceChildren(); value('diagnostics-summary', 'Checks failed. Verify endpoint configuration and refresh.'); setNotice(String(error)); $('overall-pill').className='pill bad'; $('overall-pill').textContent='CHECK FAILED'; }
   finally { $('refresh').classList.remove('spin'); }
 }
 async function refreshServices(){ serviceState=await invoke('get_autostart_status'); value('relay-service',serviceState.relay.state); value('dashboard-service',serviceState.dashboard.state); $('autostart').disabled=!serviceState.relay.installed||!serviceState.dashboard.installed; $('autostart').checked=serviceState.relay.enabled&&serviceState.dashboard.enabled; $('toggle-relay').disabled=!serviceState.relay.installed; $('toggle-relay').textContent=serviceState.relay.active?'Stop relay':'Start relay'; }

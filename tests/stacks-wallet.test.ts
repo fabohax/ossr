@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { approvedWalletProviderIds, readStacksAddress, requiresPrebuiltSponsoredTransaction } from '../ossr-ui/lib/stacks-wallet';
+import { approvedWalletProviderIds, readStacksAddress, requiresPrebuiltSponsoredTransaction } from '../ossr-ui/lib/stacks-wallet.js';
 
 describe('readStacksAddress', () => {
   it('accepts an Xverse wallet_connect address without a symbol', () => {
@@ -13,8 +13,12 @@ describe('readStacksAddress', () => {
 
   it('accepts the wrapped JSON-RPC response shape', () => {
     expect(readStacksAddress({
-      result: { addresses: [{ symbol: 'STX', address: 'SP123EXAMPLE' }] },
-    })).toBe('SP123EXAMPLE');
+      result: { addresses: [{ symbol: 'STX', address: 'ST123EXAMPLE' }] },
+    })).toBe('ST123EXAMPLE');
+  });
+
+  it('rejects a mainnet-only account', () => {
+    expect(readStacksAddress({ result: { addresses: [{ symbol: 'STX', address: 'SP123EXAMPLE' }] } })).toBeUndefined();
   });
 
   it('does not mistake a Bitcoin address for a Stacks address', () => {

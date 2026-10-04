@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OSSR Operator</title>
     <link rel="stylesheet" href="styles.css" />
+    <script src="diagnostics.js" defer></script>
     <script src="app.js" defer></script>
   </head>
   <body>
@@ -12,9 +13,10 @@
       <aside>
         <div class="brand"><span class="mark">O</span><div><strong>OSSR</strong><small>OPERATOR CONSOLE</small></div></div>
         <nav aria-label="Main navigation">
-          <button class="nav active"><span>◫</span>Overview</button>
-          <button class="nav" disabled><span>⇄</span>Activity <em>Soon</em></button>
+          <button id="overview-nav" class="nav active" aria-pressed="true"><span>◫</span>Overview</button>
+          <button id="activity-nav" class="nav" aria-pressed="false"><span>⇄</span>Activity</button>
           <button class="nav" disabled><span>⌁</span>Policy <em>Soon</em></button>
+          <button id="diagnostics-nav" class="nav" aria-pressed="false"><span>⊙</span>Diagnostics</button>
           <button class="nav" disabled><span>≡</span>Logs <em>Soon</em></button>
         </nav>
         <div class="network-card">
@@ -37,6 +39,7 @@
 
         <section id="notice" class="notice hidden" role="alert"></section>
 
+        <div id="overview-view">
         <section class="hero">
           <div>
             <p class="eyebrow">SYSTEM STATUS</p>
@@ -107,6 +110,25 @@
             <button id="toggle-relay" class="button secondary" disabled>Start relay</button>
             <label class="switch"><input id="autostart" type="checkbox" disabled /><i></i><span>Start automatically</span></label>
           </div>
+        </section>
+        </div>
+        <section id="activity-view" class="card hidden">
+          <p class="eyebrow">RELAY RECORDS</p><h2>Quotes & sponsorships</h2>
+          <p class="fineprint">Persisted quote state and broadcast results. Confirmation status and rejected attempts are not recorded here. Processing may require reconciliation; it does not prove a broadcast.</p>
+          <div class="activity-filters">
+            <label>Show <select id="activity-kind"><option value="all">All quotes</option><option value="sponsorships">Sponsorships (processing or broadcast)</option></select></label>
+            <label>State <select id="activity-state"><option value="all">All states</option><option>ISSUED</option><option>PROCESSING</option><option>BROADCAST</option></select></label>
+            <label>Search <input id="activity-search" type="search" placeholder="Quote, transaction, or principal" /></label>
+          </div>
+          <p id="activity-summary" role="status">Loading activity…</p>
+          <div class="activity-table"><table><thead><tr><th>Updated</th><th>State</th><th>Quote / transaction</th><th>Origin / recipient</th><th>Amount / fee (sats)</th><th>Quote blocks</th></tr></thead><tbody id="activity-rows"></tbody></table></div>
+        </section>
+        <section id="diagnostics-view" class="hidden">
+          <div class="card"><p class="eyebrow">READINESS CHECKS</p><h2>Diagnostics</h2>
+            <p class="fineprint">Relay readiness checks sponsor funding. Follower sync and the public reference are separate observations. Suggested actions are manual.</p>
+            <p id="diagnostics-summary" role="status">Waiting for checks…</p>
+          </div>
+          <div id="diagnostics-checks" class="diagnostics-checks"></div>
         </section>
       </main>
     </div>

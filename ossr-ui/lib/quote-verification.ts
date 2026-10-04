@@ -40,19 +40,27 @@ export function assertFreshQuote(quote: Quote, height: number) {
 export function verifyQuote(response: QuoteResponse, intent: TransferIntent, trust: QuoteTrust, height: number, balance: string): void {
   if (Object.keys(validateIntent(intent)).length) throw new Error('Correct the transfer fields before requesting approval.');
   const q = response.quote;
+  const publicKey = normalizeQuotePublicKey(trust.publicKey);
   const expected = { protocolVersion: '1', network: 'testnet', action: 'sbtc-transfer', functionName: 'sponsored-transfer', origin: intent.origin, relayId: trust.relayId, keyId: trust.keyId, policyVersion: trust.policyVersion, adapterContract: trust.adapterContract, sponsorPrincipal: trust.sponsorPrincipal };
   for (const [key, value] of Object.entries(expected)) if (q[key as keyof Quote] !== value) throw new Error(`Untrusted quote ${key}.`);
-  if (response.quotePublicKey !== trust.publicKey || q.reimbursementAsset.contract !== trust.sbtcContract || q.reimbursementAsset.assetId !== 'sbtc' || q.reimbursementAsset.unit !== 'sat' || q.reimbursementAsset.decimals !== '8') throw new Error('Untrusted quote key or asset.');
-  for (const value of [q.sponsorFee, q.maxNetworkFeeMicroStx, q.issuedAtBlock, q.expiresAtBlock]) if (!/^(0|[1-9][0-9]*)$/.test(value)) throw new Error('Malformed quote integer.');
+  if (normalizeQuotePublicKey(response.quotePublicKey) !== publicKey || q.reimbursementAsset.contract !== trust.sbtcContract || q.reimbursementAsset.assetId !== 'sbtc' || q.reimbursementAsset.unit !== 'sat' || q.reimbursementAsset.decimals !== '8') throw new Error('Untrusted quote key or asset.');
+  for (const value of [q.sponsorFee, q.maxNetworkFeeMicroStx, q.issuedAtBlock, q.expiresAtBlock]) {
+    if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value) || value.length > 39 || BigInt(value) >= 2n ** 128n) throw new Error('Malformed quote integer.');
+  }
+  if (BigInt(q.sponsorFee) === 0n || BigInt(q.maxNetworkFeeMicroStx) === 0n) throw new Error('Quote fees must be positive.');
   if (!/^0x[0-9a-f]{64}$/i.test(q.quoteId) || !/^0x[0-9a-f]{64}$/i.test(q.argumentsHash) || !/^[0-9a-f]{130}$/i.test(q.signature)) throw new Error('Malformed quote digest or signature.');
   const argumentsHash = `0x${hashStructuredData(tupleCV({ amount: uintCV(BigInt(intent.amountSats)), recipient: principalCV(intent.recipient), 'sponsor-fee': uintCV(BigInt(q.sponsorFee)), 'quote-id': bufferCV(hexToBytes(q.quoteId)), 'expiry-height': uintCV(BigInt(q.expiresAtBlock)), memo: intent.memo === undefined ? noneCV() : someCV(bufferCV(hexToBytes(intent.memo))) }))}`;
   if (q.argumentsHash !== argumentsHash) throw new Error('Quote does not match the reviewed transfer.');
   const digest = sha256(encodeStructuredDataBytes({ message: quoteMessageCV(q), domain: quoteDomainCV() }));
   const digestHex = Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('');
-  if (publicKeyFromSignatureRsv(digestHex, q.signature) !== trust.publicKey || !verifySignature(q.signature.slice(0, 128), digest, trust.publicKey)) throw new Error('Invalid relay quote signature.');
+  if (publicKeyFromSignatureRsv(digestHex, q.signature) !== publicKey || !verifySignature(q.signature.slice(0, 128), digest, publicKey)) throw new Error('Invalid relay quote signature.');
   assertFreshQuote(q, height);
   if (BigInt(q.sponsorFee) > BigInt(intent.maxSponsorFeeSats)) throw new Error('Sponsor fee exceeds your reviewed maximum.');
   if (!/^[0-9]+$/.test(balance) || BigInt(intent.amountSats) + BigInt(q.sponsorFee) > BigInt(balance)) throw new Error('Insufficient testnet sBTC for amount plus sponsor fee.');
+}
+function normalizeQuotePublicKey(value: string): string {
+  if (typeof value !== 'string' || !/^(?:0x)?(?:02|03)[0-9a-f]{64}$/i.test(value)) throw new Error('Malformed quote public key. Use a compressed secp256k1 public key.');
+  return value.replace(/^0x/i, '').toLowerCase();
 }
 function splitContractPrincipal(value: string): [string, string] { const [address, name] = value.split('.'); if (!address || !name) throw new Error('Invalid contract principal'); return [address, name]; }
 function hexToBytes(value: string) { return Uint8Array.from(value.slice(2).match(/../g) ?? [], byte => parseInt(byte, 16)); }

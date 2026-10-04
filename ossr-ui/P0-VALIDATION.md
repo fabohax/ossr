@@ -9,7 +9,7 @@ Set these public build-time variables in `ossr-ui/.env.local`, then rebuild:
 ```
 NEXT_PUBLIC_OSSR_RELAY_URL=https://your-relay.example
 NEXT_PUBLIC_STACKS_API_URL=https://api.testnet.hiro.so
-NEXT_PUBLIC_OSSR_QUOTE_PUBLIC_KEY=<compressed secp256k1 public key>
+NEXT_PUBLIC_OSSR_QUOTE_PUBLIC_KEY=<compressed secp256k1 public key, with or without 0x>
 NEXT_PUBLIC_OSSR_RELAY_ID=<operator-configured relay ID>
 NEXT_PUBLIC_OSSR_QUOTE_KEY_ID=<operator-configured quote key ID>
 NEXT_PUBLIC_OSSR_POLICY_VERSION=<operator-configured policy version>
@@ -31,7 +31,9 @@ reviewed intent. It checks testnet identity, policy, adapter, asset, sponsor,
 positive integer sats, memo bytes, maximum fee, chain height, and current balance.
 Every transfer edit invalidates the quote. Quotes show a block countdown and
 require a separate approval button. Freshness, account identity, and balances are
-checked again before signing and submitting.
+checked again after nonce lookup, immediately before the signing prompt, and
+before submitting. Quote integers must be canonical strings within the Clarity
+uint range, and fees must be positive.
 
 Leather and Xverse are the only selectable providers. Both use a prebuilt
 sponsored transaction with `stx_signTransaction` and `broadcast: false`. Returned
@@ -54,12 +56,14 @@ failures leave the in-memory receipt and tell the user to save its explorer link
 From the repository root:
 
 ```
-./node_modules/.bin/tsx ossr-ui/lib/quote-verification.test.ts
+npm run test:ui-quotes
 npm run typecheck --prefix ossr-ui
 npm run build --prefix ossr-ui
 ```
 
-The fixture uses the relay's production quote tuple/domain and signing function.
+Tests verify quotes issued by the actual relay implementation, including absent,
+empty, and populated memos and prefixed public keys. The fixture also uses the
+relay's production quote tuple/domain and signing function.
 Tests reject every top-level signed-field mutation, nested asset mutations,
 changed intent, expired/future height, insufficient balance, invalid inputs,
 unsigned wallet bytes, wrong origin and altered wallet call. Browser checks cover

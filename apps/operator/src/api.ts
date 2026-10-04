@@ -479,6 +479,27 @@ export class OssrRelayApi {
       respond(request, response, 200, toEntry(operator), this.corsAllowedOrigins);
       return;
     }
+    if (request.method === 'GET' && request.url === '/v1/activity') {
+      // Operational history is local-only, including when the relay binds publicly.
+      if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? '')) {
+        respond(request, response, 403, { error: 'FORBIDDEN', message: 'Activity is available only over loopback.' }, this.corsAllowedOrigins);
+        return;
+      }
+      const records = await this.quoteStore.list();
+      records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.quote.quoteId.localeCompare(b.quote.quoteId));
+      respond(request, response, 200, {
+        total: records.length,
+        entries: records.slice(0, 500).map(record => ({
+          quoteId: record.quote.quoteId, state: record.state, updatedAt: record.updatedAt,
+          origin: record.intent.origin, recipient: record.intent.recipient,
+          amountSats: record.intent.amountSats.toString(), sponsorFeeSats: record.quote.sponsorFee,
+          issuedAtBlock: record.quote.issuedAtBlock, expiresAtBlock: record.quote.expiresAtBlock,
+          transactionId: record.result ? `0x${record.result.transaction_id}` : null,
+          feeMicroStx: record.result?.fee_microstx ?? null,
+        })),
+      }, []);
+      return;
+    }
     const sponsorshipMatch = request.url?.match(/^\/v1\/sponsorships\/0x([0-9a-f]{64})$/i);
     if (request.method === 'GET' && sponsorshipMatch) {
       try {

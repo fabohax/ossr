@@ -5,6 +5,12 @@ Next.js testnet interface for the origin side of OSSR v0.1.
 The prioritized work required for a grant-reviewable interface is tracked in
 [GRANT-READINESS.md](GRANT-READINESS.md).
 
+Configure the trusted relay key and identity before signing, using
+[P0-VALIDATION.md](P0-VALIDATION.md#configure-trust-before-signing). These public
+values must come from a trusted operator channel. Restart development or rebuild
+the deployment after changing them. Run `npm run test:ui-quotes` from the
+repository root to verify quote and origin-signing safeguards.
+
 ## Wallet model
 
 The MVP should use an existing browser wallet through Stacks Connect. The UI
@@ -24,6 +30,17 @@ in extension storage/background context, and handle prompts for address
 sharing and signing. That is useful later if OSSR wants its own wallet, but the
 first interface should prove compatibility with installed wallets such as
 Leather or Xverse.
+
+## Social sharing metadata
+
+The generated cover in `app/opengraph-image.jpg` is shared by Open Graph and
+Twitter previews through Next.js file-based metadata. The accompanying `.alt.txt`
+files provide accessible descriptions. Generation details are in
+`assets/og-cover-prompt.md`.
+
+Set `NEXT_PUBLIC_SITE_URL` to the public origin (for example,
+`https://your-domain.example`) when deploying to a custom domain. Otherwise,
+metadata uses the Vercel production/deployment hostname or localhost in development.
 
 ## Local development
 

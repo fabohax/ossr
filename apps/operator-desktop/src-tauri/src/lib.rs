@@ -23,6 +23,14 @@ mod desktop {
     }
 
     #[tauri::command]
+    async fn get_activity(
+        monitor: State<'_, Monitor>,
+        relay_url: String,
+    ) -> Result<serde_json::Value, String> {
+        monitor.activity(&relay_url).await
+    }
+
+    #[tauri::command]
     fn get_autostart_status() -> AutostartState {
         services::status()
     }
@@ -47,6 +55,7 @@ mod desktop {
             .manage(Monitor::new())
             .invoke_handler(tauri::generate_handler![
                 get_snapshot,
+                get_activity,
                 get_autostart_status,
                 install_autostart,
                 set_autostart,

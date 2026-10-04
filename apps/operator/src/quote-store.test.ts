@@ -45,6 +45,12 @@ try {
   assert.equal((await restarted.reserve(processingId, 'request-c'))?.kind, 'reserved');
   assert.equal((await new JsonQuoteStore(path).reserve(processingId, 'request-c'))?.kind, 'processing');
 
+  const history = await new JsonQuoteStore(path).list();
+  assert.equal(history.length, 2);
+  assert.equal(history.find(record => record.quote.quoteId === quoteId)?.state, 'BROADCAST');
+  history[0].quote.sponsorFee = '999';
+  assert.equal((await restarted.get(quoteId))?.quote.sponsorFee, '10', 'history reads must not mutate authoritative records');
+
   const mode = (await stat(path)).mode & 0o777;
   assert.equal(mode, 0o600);
 } finally {

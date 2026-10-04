@@ -472,17 +472,27 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
       });
       if (!account.publicKey) throw new Error('Wallet did not provide its Stacks public key. Reconnect with Leather or Xverse.');
       window.localStorage.setItem(connectedWalletPublicKeyKey, account.publicKey);
-      const walletResult = await signPreparedTransactionWithCompatibleWallet(prepared, snapshot.origin);
+      const walletResult = await signPreparedTransactionWithCompatibleWallet(prepared, snapshot.origin, async () => {
+        // Nonce lookup can take long enough for the account, intent, or quote to change.
+        const [latestHeight, latestBalance, latestAccount] = await Promise.all([
+          fetchStacksTipHeight(),
+          fetchSbtcBalance(snapshot.origin, trust.sbtcContract),
+          request({ enableLocalStorage: false }, 'stx_getAddresses'),
+        ]);
+        verifyQuote(quoteToSubmit, snapshot, trust, latestHeight, latestBalance.balanceSats);
+        if (intentRef.current !== JSON.stringify(snapshot) || readStacksAccount(latestAccount)?.address !== snapshot.origin) throw new Error('Wallet or transfer changed. Request a fresh quote.');
+      });
       const transaction = extractRawTransaction(walletResult);
       if (!transaction) throw new Error('Wallet did not return raw signed transaction bytes. This wallet may only support sign-and-broadcast contract calls.');
       validateSignedWalletTransaction(transaction, prepared, snapshot.origin);
       if (intentRef.current !== JSON.stringify(snapshot) || readStacksAccount(await request({ enableLocalStorage: false }, 'stx_getAddresses'))?.address !== snapshot.origin) throw new Error('Wallet or transfer changed during signing. Request a fresh quote.');
       const [submissionHeight, submissionBalance] = await Promise.all([fetchStacksTipHeight(), fetchSbtcBalance(snapshot.origin, trust.sbtcContract)]);
       verifyQuote(quoteToSubmit, snapshot, trust, submissionHeight, submissionBalance.balanceSats);
+      if (intentRef.current !== JSON.stringify(snapshot)) throw new Error('Transfer changed before submission. Request a fresh quote.');
       let response: SponsorshipResponse;
       try {
         response = await submitSponsorship({
-          relayUrl,
+          relayUrl: snapshot.relayUrl,
           quoteId: quoteToSubmit.quote.quoteId,
           transaction,
           user: snapshot.origin,
@@ -874,6 +884,7 @@ function ReviewRow({ label, value, valueNode, mono = false, emphasized = false }
 async function signPreparedTransactionWithCompatibleWallet(
   prepared: ReturnType<typeof prepareWalletContractCall>,
   origin: string,
+  beforeApproval: () => Promise<void>,
 ) {
   const publicKey = window.localStorage.getItem(connectedWalletPublicKeyKey);
   if (!publicKey) {
@@ -885,6 +896,7 @@ async function signPreparedTransactionWithCompatibleWallet(
     publicKey,
   });
   const { request } = await import('@stacks/connect');
+  await beforeApproval();
   return request('stx_signTransaction', { transaction, broadcast: false });
 }
 

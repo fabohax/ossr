@@ -429,6 +429,17 @@ try {
     assert.equal(lifecycleMetrics.body.sponsorships.confirmations, 1);
     assert.match(lifecycleMetrics.body.costs.stxPaidMicroStx, /^[1-9]\d*$/);
     assert.equal(lifecycleMetrics.body.costs.satsReimbursed, '10');
+    const activityResponse = await originalFetch(`http://127.0.0.1:${lifecyclePort}/v1/activity`, { headers: { Origin: 'https://example.com' } });
+    assert.equal(activityResponse.status, 200);
+    assert.equal(activityResponse.headers.get('cache-control'), 'no-store');
+    assert.equal(activityResponse.headers.get('access-control-allow-origin'), null);
+    const activity = await activityResponse.json() as { total: number; entries: Record<string, unknown>[] };
+    assert.equal(activity.total, 1);
+    assert.equal(activity.entries[0].state, 'BROADCAST');
+    assert.equal(activity.entries[0].transactionId, `0x${completed.transaction_id}`);
+    assert.equal(activity.entries[0].sponsorFeeSats, '10');
+    assert.equal('signature' in activity.entries[0], false);
+    assert.equal('requestHash' in activity.entries[0], false);
   } finally {
     await new Promise<void>((resolve, reject) => lifecycleServer.close(error => error ? reject(error) : resolve()));
   }

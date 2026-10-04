@@ -18,6 +18,7 @@ export type QuoteReservation =
   | { kind: 'mismatch'; record: QuoteRecord };
 
 export interface QuoteStore {
+  list(): Promise<QuoteRecord[]>;
   putIssued(record: StoredQuote): Promise<void>;
   get(quoteId: string): Promise<QuoteRecord | undefined>;
   findByTransactionId(transactionId: string): Promise<QuoteRecord | undefined>;
@@ -29,6 +30,8 @@ export interface QuoteStore {
 export class MemoryQuoteStore implements QuoteStore {
   protected records = new Map<string, QuoteRecord>();
   private queue: Promise<void> = Promise.resolve();
+
+  async list(): Promise<QuoteRecord[]> { return [...this.records.values()].map(record => clone(record)!); }
 
   async putIssued(record: StoredQuote): Promise<void> {
     await this.exclusive(async () => {
@@ -87,6 +90,7 @@ export class JsonQuoteStore extends MemoryQuoteStore {
   private loaded = false;
   constructor(private readonly path: string) { super(); }
 
+  override async list(): Promise<QuoteRecord[]> { await this.load(); return super.list(); }
   override async putIssued(record: StoredQuote): Promise<void> { await this.load(); await super.putIssued(record); }
   override async get(quoteId: string): Promise<QuoteRecord | undefined> { await this.load(); return super.get(quoteId); }
   override async findByTransactionId(transactionId: string): Promise<QuoteRecord | undefined> { await this.load(); return super.findByTransactionId(transactionId); }

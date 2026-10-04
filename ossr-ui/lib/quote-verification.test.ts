@@ -4,6 +4,8 @@ import { bufferCV, contractPrincipalCV, hashStructuredData, noneCV, principalCV,
 import { verifyQuote, validateIntent, type TransferIntent, type QuoteTrust } from './quote-verification';
 import { isTerminalChainStatus, extractRawTransaction, prepareWalletContractCall, prepareUnsignedSponsoredTransaction, validateSignedWalletTransaction } from './ossr';
 import type { Quote, QuoteResponse } from './ossr';
+import { OssrRelayApi } from '../../apps/operator/src/api';
+import { OssrOperator } from '../../apps/operator/src/operator';
 const privateKey = '1'.padStart(64, '0') + '01';
 const origin = 'ST14MZ2VA0731Q6TEPK82FDQNHWKY8NPEMND33NE4';
 const sponsor = 'ST2QKEV89ZB3PCW1KC8206FDFJ7F6QANMR22ZG7F5';
@@ -14,6 +16,36 @@ quote.argumentsHash = '0x' + hashStructuredData(tupleCV({ amount: uintCV(100), r
 quote.signature = signStructuredData({ message: quoteMessageCV(quote), domain: quoteDomainCV(), privateKey });
 const response: QuoteResponse = { quote, quotePublicKey: trust.publicKey };
 verifyQuote(response, intent, trust, 101, '110');
+verifyQuote({ ...response, quotePublicKey: `0x${trust.publicKey}` }, intent, { ...trust, publicKey: `0x${trust.publicKey}` }, 101, '110');
+const originalFetch = globalThis.fetch;
+try {
+  globalThis.fetch = async input => {
+    assert.equal(String(input), 'https://quote-test.invalid/v2/info');
+    return new Response(JSON.stringify({ stacks_tip_height: 100 }));
+  };
+  const [adapterContractAddress, adapterContractName] = trust.adapterContract.split('.');
+  const [sbtcContractAddress, sbtcContractName] = trust.sbtcContract.split('.');
+  const operator = new OssrOperator({ network: 'testnet', sponsorPrivateKey: privateKey, logger: () => undefined });
+  const relayTrust = { ...trust, sponsorPrincipal: operator.address };
+  const relay = new OssrRelayApi({ operator, stacksApiUrl: 'https://quote-test.invalid', quotePrivateKey: privateKey, relayId: trust.relayId, quoteKeyId: trust.keyId, policyVersion: trust.policyVersion, adapterContractAddress, adapterContractName, sbtcContractAddress, sbtcContractName, sponsorFeeSats: 10n, quoteLifetimeBlocks: 10n });
+  for (const memo of [undefined, '0x', '0x6869']) {
+    const relayIntent = { ...intent, ...(memo === undefined ? {} : { memo }) };
+    const issued = await relay.quote(relayIntent);
+    verifyQuote(issued, relayIntent, relayTrust, 101, '110');
+    assert.throws(() => verifyQuote(issued, relayIntent, trust, 101, '110'), /sponsorPrincipal/);
+  }
+} finally { globalThis.fetch = originalFetch; }
+console.log('Actual relay quotes verified for absent, empty, and populated memos.');
+for (const field of ['sponsorFee', 'maxNetworkFeeMicroStx', 'issuedAtBlock', 'expiresAtBlock'] as const) {
+  for (const value of [100, '01', '-1', (2n ** 128n).toString(), '9'.repeat(100)]) {
+    const changed = structuredClone(response);
+    (changed.quote as unknown as Record<string, unknown>)[field] = value;
+    assert.throws(() => verifyQuote(changed, intent, trust, 101, '110'), /Malformed quote integer/);
+  }
+}
+assert.throws(() => verifyQuote({ ...response, quotePublicKey: '02' + '00'.repeat(32) }, intent, trust, 101, '110'), /Untrusted/);
+assert.throws(() => verifyQuote(response, intent, trust, Number.NaN, '110'));
+assert.throws(() => verifyQuote(response, { ...intent, maxSponsorFeeSats: '9' }, trust, 101, '110'), /maximum/);
 for (const field of Object.keys(quote)) {
   const changed = structuredClone(response);
   if (field === 'reimbursementAsset') changed.quote.reimbursementAsset.unit = 'other' as 'sat';

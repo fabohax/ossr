@@ -8,7 +8,7 @@ import {
   serializeCV,
   uintCV,
 } from '@stacks/transactions';
-import { prepareUnsignedSponsoredTransaction, type PreparedWalletCall } from '../ossr-ui/lib/ossr';
+import { prepareUnsignedSponsoredTransaction, type PreparedWalletCall } from '../ossr-ui/lib/ossr.js';
 
 describe('Xverse sponsored transaction preparation', () => {
   it('constructs sponsored authorization before asking the wallet to sign', async () => {

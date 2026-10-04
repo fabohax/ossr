@@ -10,6 +10,8 @@ Rust and the webview has no shell or filesystem capability.
 - local Stacks follower status, chain heights, and `is_fully_synced`;
 - comparison against a public testnet reference tip;
 - installation and control of a hardened, machine-level relay service;
+- readiness diagnostics with evidence and suggested operator actions;
+- filterable quote and sponsorship history from the local relay;
 - opt-in relay startup at boot and dashboard startup at desktop login;
 - native Polkit authentication for privileged changes, without handling the
   administrator password in the application.
@@ -169,3 +171,43 @@ Both services are enabled during installation. The relay starts during system
 boot, independently of login. The dashboard starts with the graphical user
 session because a GUI cannot safely start before a display session exists. Use
 **Start automatically** to disable or re-enable both services together.
+
+## Activity history
+
+Open **Activity** to search quote IDs, transaction IDs, or origin/recipient
+principals and filter by quote state or sponsorship records. Refresh runs every
+15 seconds and shows the latest 500 stored quotes, with their total count.
+Amounts remain integer satoshi strings to preserve precision.
+
+History comes from the relay's protected quote store (`.ossr/quotes.json` by
+default), so it survives relay restarts when using the CLI's JSON store.
+`GET /v1/activity` is available only to loopback clients and permits no browser
+CORS origins. It returns public identifiers, amounts, block bounds, timestamps,
+and stored state, without signatures, request hashes, memos, or transaction bytes.
+Older relays show an update instruction instead of an empty history.
+
+`ISSUED`, `PROCESSING`, and `BROADCAST` describe stored quote state.
+Confirmation status and rejected attempts are not persisted in this history.
+A processing record can include an ambiguous broadcast and requires investigation.
+Quote expiry is shown as a block height rather than inferred from elapsed time.
+
+## Diagnostics
+
+Open **Diagnostics** for relay liveness/readiness, sponsor funding, follower
+connectivity and synchronization, reference availability, chain-tip comparison,
+and quote/sponsorship capabilities. Each check shows its observation and a
+suggested manual action; refresh reruns checks every 15 seconds while this view
+is open. Failed refreshes clear old diagnostic results.
+
+Relay readiness currently checks sponsor funding through its configured upstream.
+Follower synchronization and public-reference checks are separate observations;
+reference outages do not make relay readiness fail. Low balances use exact
+integer comparisons. Upstream error details are summarized without exposing raw
+responses or credentials. HTTP success with an unexpected health payload fails
+closed. These checks do not prove simulation or transaction acceptance.
+
+Run recommendation checks with:
+
+```sh
+node apps/operator-desktop/ui/diagnostics.test.cjs
+```
