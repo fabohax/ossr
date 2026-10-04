@@ -89,4 +89,3 @@ function quoteMessageCV(quote: Quote) {
     'key-id': stringAsciiCV(quote.keyId),
   });
 }
-
