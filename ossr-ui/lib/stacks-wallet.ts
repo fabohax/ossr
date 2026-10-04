@@ -21,6 +21,22 @@ export function readStacksAddress(response: unknown): string | undefined {
   return readStacksAccount(response)?.address;
 }
 
+export function requireTestnetStacksAccount(response: unknown): WalletAddress & { address: string } {
+  const account = readStacksAccount(response);
+  if (account?.address) return { ...account, address: account.address };
+  if (readWalletAddresses(response).some(entry => typeof entry.address === 'string' && /^(SP|SM)/.test(entry.address))) {
+    throw new Error('OSSR currently uses Stacks testnet. Switch Leather or Xverse to testnet, then reconnect.');
+  }
+  throw new Error('The wallet did not return a Stacks testnet address. Enable Stacks in your wallet and reconnect.');
+}
+
+// Connect stores STX addresses separately and omits public keys from its cache.
+export function readCachedStacksAccount(session: unknown, expectedAddress?: string): WalletAddress | undefined {
+  if (!isRecord(session) || !isRecord(session.addresses)) return undefined;
+  const response = { addresses: session.addresses.stx };
+  return readStacksAccount(response, expectedAddress) ?? readStacksAccount(response);
+}
+
 export function readStacksAccount(response: unknown, expectedAddress?: string): WalletAddress | undefined {
   return readWalletAddresses(response).find(entry => (
     typeof entry.address === 'string'

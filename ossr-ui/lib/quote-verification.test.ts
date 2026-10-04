@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readStacksAccount } from './stacks-wallet';
+import { uncompressPublicKey } from '@stacks/transactions';
 import { bufferCV, contractPrincipalCV, hashStructuredData, noneCV, principalCV, signStructuredData, stringAsciiCV, tupleCV, uintCV, privateKeyToPublic, publicKeyToHex, getAddressFromPublicKey, TransactionSigner, deserializeTransaction } from '@stacks/transactions';
 import { verifyQuote, validateIntent, type TransferIntent, type QuoteTrust } from './quote-verification';
 import { isTerminalChainStatus, extractRawTransaction, prepareWalletContractCall, prepareUnsignedSponsoredTransaction, validateSignedWalletTransaction } from './ossr';
@@ -16,6 +17,8 @@ quote.argumentsHash = '0x' + hashStructuredData(tupleCV({ amount: uintCV(100), r
 quote.signature = signStructuredData({ message: quoteMessageCV(quote), domain: quoteDomainCV(), privateKey });
 const response: QuoteResponse = { quote, quotePublicKey: trust.publicKey };
 verifyQuote(response, intent, trust, 101, '110');
+verifyQuote({ ...response, quotePublicKey: uncompressPublicKey(trust.publicKey) }, intent, trust, 101, '110');
+verifyQuote(response, intent, { ...trust, publicKey: `0x${uncompressPublicKey(trust.publicKey)}` }, 101, '110');
 verifyQuote({ ...response, quotePublicKey: `0x${trust.publicKey}` }, intent, { ...trust, publicKey: `0x${trust.publicKey}` }, 101, '110');
 const originalFetch = globalThis.fetch;
 try {
@@ -43,7 +46,8 @@ for (const field of ['sponsorFee', 'maxNetworkFeeMicroStx', 'issuedAtBlock', 'ex
     assert.throws(() => verifyQuote(changed, intent, trust, 101, '110'), /Malformed quote integer/);
   }
 }
-assert.throws(() => verifyQuote({ ...response, quotePublicKey: '02' + '00'.repeat(32) }, intent, trust, 101, '110'), /Untrusted/);
+assert.throws(() => verifyQuote({ ...response, quotePublicKey: publicKeyToHex(privateKeyToPublic('2'.padStart(64, '0') + '01')) }, intent, trust, 101, '110'), /Untrusted/);
+assert.throws(() => verifyQuote({ ...response, quotePublicKey: '02' + '00'.repeat(32) }, intent, trust, 101, '110'), /Malformed quote public key/);
 assert.throws(() => verifyQuote(response, intent, trust, Number.NaN, '110'));
 assert.throws(() => verifyQuote(response, { ...intent, maxSponsorFeeSats: '9' }, trust, 101, '110'), /maximum/);
 for (const field of Object.keys(quote)) {

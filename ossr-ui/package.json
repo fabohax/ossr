@@ -12,6 +12,8 @@
     "@base-ui/react": "^1.8.0",
     "@noble/hashes": "^1.8.0",
     "@stacks/connect": "^8.1.9",
+    "@stacks/connect-ui": "^8.1.2",
+    "@stacks/encryption": "^7.6.0",
     "@stacks/transactions": "^7.6.0",
     "@types/mdx": "^2.0.14",
     "class-variance-authority": "^0.7.1",

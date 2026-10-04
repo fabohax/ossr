@@ -1,6 +1,8 @@
 import { bufferCV, createAddress, addressToString, contractPrincipalCV, encodeStructuredDataBytes, hashStructuredData, noneCV, principalCV, publicKeyFromSignatureRsv, someCV, stringAsciiCV, tupleCV, uintCV, validateStacksAddress, verifySignature } from '@stacks/transactions';
 import { sha256 } from '@noble/hashes/sha256';
 import type { Quote, QuoteResponse } from './ossr';
+import { isValidRelayUrl } from './relay-url';
+import { compressPublicKey } from '@stacks/transactions';
 
 export type TransferIntent = { relayUrl: string; origin: string; recipient: string; amountSats: string; maxSponsorFeeSats: string; memo?: string };
 export type QuoteTrust = { publicKey: string; relayId: string; keyId: string; policyVersion: string; adapterContract: string; sbtcContract: string; sponsorPrincipal: string };
@@ -27,11 +29,9 @@ export function validateIntent(input: TransferIntent): Record<string, string> {
     if (!/^[1-9][0-9]*$/.test(input[field]) || BigInt(input[field]) >= 2n ** 128n) errors[field] = 'Enter positive whole sats within the Clarity uint range.';
   }
   if (input.memo !== undefined && !/^0x(?:[0-9a-f]{2}){0,34}$/i.test(input.memo)) errors.memo = 'Memo must contain at most 34 bytes encoded as hex.';
-  try {
-    const url = new URL(input.relayUrl);
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
-    if (typeof location !== 'undefined' && location.protocol === 'https:' && url.protocol !== 'https:') throw new Error();
-  } catch { errors.relayUrl = 'Use an absolute HTTP(S) relay URL; HTTPS pages require HTTPS.'; }
+  if (!isValidRelayUrl(input.relayUrl, typeof location !== 'undefined' ? location.href : undefined)) {
+    errors.relayUrl = 'Use a same-site relay path or an absolute HTTP(S) relay URL; HTTPS pages require HTTPS.';
+  }
   return errors;
 }
 export function assertFreshQuote(quote: Quote, height: number) {
@@ -59,8 +59,12 @@ export function verifyQuote(response: QuoteResponse, intent: TransferIntent, tru
   if (!/^[0-9]+$/.test(balance) || BigInt(intent.amountSats) + BigInt(q.sponsorFee) > BigInt(balance)) throw new Error('Insufficient testnet sBTC for amount plus sponsor fee.');
 }
 function normalizeQuotePublicKey(value: string): string {
-  if (typeof value !== 'string' || !/^(?:0x)?(?:02|03)[0-9a-f]{64}$/i.test(value)) throw new Error('Malformed quote public key. Use a compressed secp256k1 public key.');
-  return value.replace(/^0x/i, '').toLowerCase();
+  if (typeof value !== 'string' || !/^(?:0x)?(?:(?:02|03)[0-9a-f]{64}|04[0-9a-f]{128})$/i.test(value)) throw new Error('Malformed quote public key. Use a secp256k1 public key.');
+  try {
+    return compressPublicKey(value.replace(/^0x/i, '')).toLowerCase();
+  } catch {
+    throw new Error('Malformed quote public key. Use a valid secp256k1 public key.');
+  }
 }
 function splitContractPrincipal(value: string): [string, string] { const [address, name] = value.split('.'); if (!address || !name) throw new Error('Invalid contract principal'); return [address, name]; }
 function hexToBytes(value: string) { return Uint8Array.from(value.slice(2).match(/../g) ?? [], byte => parseInt(byte, 16)); }

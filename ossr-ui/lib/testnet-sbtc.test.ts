@@ -1,0 +1,50 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { hashMessage } from '@stacks/encryption';
+import { getAddressFromPrivateKey, privateKeyToPublic, randomPrivateKey, signMessageHashRsv } from '@stacks/transactions';
+import { POST } from '../app/api/testnet-sbtc/route';
+const directory = await mkdtemp(join(tmpdir(), 'ossr-faucet-'));
+process.env.SBTC_FAUCET_PRIVATE_KEY = randomPrivateKey();
+process.env.SBTC_FAUCET_DATA_DIR = directory;
+const wallet = randomPrivateKey();
+const address = getAddressFromPrivateKey(wallet, 'testnet');
+const post = (body: object) => POST(new Request('http://localhost/api/testnet-sbtc', { method: 'POST', body: JSON.stringify(body) }));
+const sign = (message: string, key = wallet) => signMessageHashRsv({ messageHash: Buffer.from(hashMessage(message)).toString('hex'), privateKey: key });
+const originalFetch = globalThis.fetch;
+let broadcasts = 0;
+let loseResponse = false;
+globalThis.fetch = async input => {
+  const url = String(input);
+  if (url.endsWith('/balances')) return Response.json({ fungible_tokens: { 'SN3VMHXEN64ZZF71JQ5VESXDWTR301XTTXGF4J8F1.sbtc-token::sbtc-token': { balance: '10000' } } });
+  if (url.includes('/fees/transaction')) return Response.json({ estimations: [{ fee: 1000 }, { fee: 2000 }, { fee: 3000 }] });
+  if (url.includes('/nonces')) return Response.json({ possible_next_nonce: 0 });
+  if (url.includes('/accounts/')) return Response.json({ nonce: 0 });
+  if (url.endsWith('/v2/transactions')) { broadcasts++; if (loseResponse) throw new Error('Lost response'); return Response.json('a'.repeat(64)); }
+  throw new Error(`Unexpected request: ${url}`);
+};
+try {
+  assert.equal((await post({ address: getAddressFromPrivateKey(wallet, 'mainnet') })).status, 400);
+  const challenge = await (await post({ address })).json();
+  const claim = { address, ...challenge, signature: sign(challenge.message), publicKey: privateKeyToPublic(wallet) };
+  assert.equal((await post({ ...claim, message: challenge.message + 'tampered' })).status, 400);
+  assert.equal((await post({ ...claim, publicKey: privateKeyToPublic(randomPrivateKey()) })).status, 403);
+  const paid = await post(claim);
+  assert.equal(paid.status, 200, await paid.clone().text());
+  const receipt = await paid.json();
+  assert.equal(receipt.amountSats, '10');
+  assert.equal((await (await post(claim)).json()).txid, receipt.txid);
+  assert.equal(broadcasts, 1);
+  const next = await (await post({ address })).json();
+  assert.equal((await post({ address, ...next, signature: sign(next.message), publicKey: privateKeyToPublic(wallet) })).status, 429);
+  const other = randomPrivateKey();
+  const otherAddress = getAddressFromPrivateKey(other, 'testnet');
+  const otherChallenge = await (await post({ address: otherAddress })).json();
+  const otherClaim = { address: otherAddress, ...otherChallenge, publicKey: privateKeyToPublic(other), signature: sign(otherChallenge.message, other) };
+  loseResponse = true;
+  assert.equal((await post(otherClaim)).status, 202);
+  assert.equal((await post(otherClaim)).status, 200);
+  assert.equal(broadcasts, 2);
+  console.log('Passed signature validation, tampering, replay, daily limit, and ambiguous broadcast checks.');
+} finally { globalThis.fetch = originalFetch; await rm(directory, { recursive: true, force: true }); }

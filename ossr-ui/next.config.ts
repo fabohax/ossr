@@ -5,7 +5,7 @@ const localDevOrigins = process.env.OSSR_ALLOWED_DEV_ORIGINS
   ?.split(',')
   .map(origin => origin.trim())
   .filter(Boolean) ?? [];
-const relayProxyUrl = process.env.OSSR_RELAY_PROXY_URL?.replace(/\/$/, '');
+const relayProxyUrl = (process.env.OSSR_RELAY_PROXY_URL || 'https://relay.ossr.network').replace(/\/$/, '');
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: [

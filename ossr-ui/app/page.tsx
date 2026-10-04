@@ -6,8 +6,8 @@ import { useEffect, useState } from 'react';
 import { ArrowRight, Blocks, Check, ChevronRight, CircleDot, Code2, Github, ShieldCheck, Sparkles, TerminalSquare, Users, WalletCards } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { enableDarkStacksWalletSelector } from '@/lib/stacks-wallet-theme';
-import { approvedWalletProviderIds, connectedWalletPublicKeyKey, readStacksAccount } from '@/lib/stacks-wallet';
+import { connectTestnetWallet } from '@/lib/connect-wallet';
+import { connectedWalletPublicKeyKey, requireTestnetStacksAccount } from '@/lib/stacks-wallet';
 import Dashboard from './dashboard/page';
 import styles from './page.module.css';
 import { nostrProfileUrl } from '@/lib/social';
@@ -56,12 +56,9 @@ export default function Home() {
     }
     setConnectingWallet(true);
     setWalletError('');
-    const stopWalletThemeObserver = enableDarkStacksWalletSelector();
     try {
-      const { connect } = await import('@stacks/connect');
-      const response = await connect({ forceWalletSelect: true, approvedProviderIds: approvedWalletProviderIds });
-      const account = readStacksAccount(response);
-      if (!account?.address) throw new Error('The wallet connected but did not return a Stacks address.');
+      const response = await connectTestnetWallet();
+      const account = requireTestnetStacksAccount(response);
       window.localStorage.setItem(connectedAddressKey, account.address);
       if (account.publicKey) window.localStorage.setItem(connectedWalletPublicKeyKey, account.publicKey);
       else window.localStorage.removeItem(connectedWalletPublicKeyKey);
@@ -70,7 +67,6 @@ export default function Home() {
     } catch (caught) {
       setWalletError(caught instanceof Error ? caught.message : 'The wallet could not be connected.');
     } finally {
-      stopWalletThemeObserver();
       setConnectingWallet(false);
     }
   }

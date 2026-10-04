@@ -61,12 +61,14 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`. The dashboard points to the relay on
-`http://127.0.0.1:3002` by default. To override it, create
+Open `http://localhost:3000`. The dashboard uses `https://relay.ossr.network`
+by default through the same-origin `/relay` proxy, so localhost and LAN access
+do not require relay CORS changes. To use a local operator instead, create
 `ossr-ui/.env.local` before running `npm run dev`:
 
 ```dotenv
-NEXT_PUBLIC_OSSR_RELAY_URL=http://127.0.0.1:3002
+NEXT_PUBLIC_OSSR_RELAY_URL=/relay
+OSSR_RELAY_PROXY_URL=http://127.0.0.1:3002
 ```
 
 Next.js reads this UI-specific file from `ossr-ui`; the relay continues to read
@@ -78,3 +80,13 @@ Browsing the UI and fetching relay metadata do not require a synchronized local
 Stacks node. Submitting a sponsorship does: if the simulation follower is
 behind the public testnet tip, the relay intentionally returns HTTP 503 with
 `SIMULATION_STALE`.
+
+### Request testnet sBTC
+
+The transfer modal offers **Request Testnet sBTC** after connecting a testnet wallet. The wallet signs a five-minute request; `/api/testnet-sbtc` verifies ownership and sends exactly 10 sats from the server sponsor, which also pays STX fees. The balance updates after confirmation on its existing refresh interval.
+
+Set `SBTC_FAUCET_PRIVATE_KEY` (or `SPONSOR_PRIVATE_KEY`) in `ossr-ui/.env.local` or the server environment. Never use a `NEXT_PUBLIC_` variable for this key. Fund its testnet address with sBTC and STX. `SBTC_FAUCET_CONTRACT` defaults to `SN3VMHXEN64ZZF71JQ5VESXDWTR301XTTXGF4J8F1.sbtc-token`.
+
+Claims are limited to once per address every 24 hours. Set `SBTC_FAUCET_DATA_DIR` to a persistent directory (default `.sbtc-faucet`). This endpoint requires a Node server with persistent writable storage; ephemeral serverless storage does not preserve limits. Requests serialize using an exclusive sponsor lock, and claim receipts are saved before broadcasting so retries cannot pay twice. If the server crashes while holding `sponsor.lock`, inspect the saved receipts and chain status before removing the lock. Run one faucet instance per sponsor and coordinate other services using the same key to avoid nonce conflicts.
+
+Run the mocked endpoint checks with `../node_modules/.bin/tsx lib/testnet-sbtc.test.ts` from `ossr-ui`.

@@ -95,6 +95,13 @@ export type SbtcBalance = {
   token: string;
 };
 
+export class NetworkRequestError extends Error {
+  constructor(public readonly url: string, public readonly submission: boolean, cause: unknown) {
+    super(`Network request failed: ${url}`, { cause });
+    this.name = 'NetworkRequestError';
+  }
+}
+
 export class RelayRequestError extends Error {
   constructor(
     public readonly status: number,
@@ -228,7 +235,10 @@ export async function prepareUnsignedSponsoredTransaction(input: {
   if (derivedAddress !== input.origin) {
     throw new Error('The wallet public key does not match the connected Stacks address. Reconnect the wallet and try again.');
   }
-  const nonce = input.nonce ?? await fetchNonce({ address: input.origin, network: 'testnet' });
+  const nonce = input.nonce ?? await fetchNonce({ address: input.origin, network: 'testnet' }).catch(error => {
+    if (error instanceof TypeError) throw new NetworkRequestError('https://api.testnet.hiro.so (account nonce)', false, error);
+    throw error;
+  });
   const transaction = await makeUnsignedContractCall({
     contractAddress: input.call.contractAddress,
     contractName: input.call.contractName,
@@ -333,7 +343,10 @@ const ADAPTER_ERRORS: Record<number, string> = {
 };
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, signal: init?.signal ?? AbortSignal.timeout(15000), cache: 'no-store' });
+  const response = await fetch(url, { ...init, signal: init?.signal ?? AbortSignal.timeout(15000), cache: 'no-store' }).catch(error => {
+    if (error instanceof TypeError) throw new NetworkRequestError(url, init?.method === 'POST' && url.endsWith('/v1/sponsorships'), error);
+    throw error;
+  });
   const body = await response.json().catch(() => null);
   if (!response.ok) {
     const envelope = isRecord(body) && isRecord(body.error) ? body.error : body;

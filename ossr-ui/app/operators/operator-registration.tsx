@@ -8,8 +8,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { enableDarkStacksWalletSelector } from '@/lib/stacks-wallet-theme';
-import { approvedWalletProviderIds, connectedWalletPublicKeyKey, readStacksAccount } from '@/lib/stacks-wallet';
+import { connectTestnetWallet } from '@/lib/connect-wallet';
+import { connectedWalletPublicKeyKey, requireTestnetStacksAccount } from '@/lib/stacks-wallet';
 
 const contractAddress = process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ADDRESS
   ?? 'ST2SY3PZHMVQMYN1W4SBJ9MPHW4P8J01ST7TVQ68X';
@@ -35,11 +35,8 @@ export function OperatorRegistration() {
     setBusy('connect');
     setError('');
     try {
-      const { connect } = await import('@stacks/connect');
-      const stopWalletThemeObserver = enableDarkStacksWalletSelector();
-      const response = await connect({ forceWalletSelect: true, approvedProviderIds: approvedWalletProviderIds }).finally(stopWalletThemeObserver);
-      const account = readStacksAccount(response);
-      if (!account?.address) throw new Error('The wallet did not return a Stacks address.');
+      const response = await connectTestnetWallet();
+      const account = requireTestnetStacksAccount(response);
       setAddress(account.address);
       window.localStorage.setItem(connectedAddressKey, account.address);
       if (account.publicKey) window.localStorage.setItem(connectedWalletPublicKeyKey, account.publicKey);
