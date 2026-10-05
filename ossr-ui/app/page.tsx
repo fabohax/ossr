@@ -7,6 +7,7 @@ import { ArrowRight, Blocks, Check, ChevronRight, CircleDot, Code2, Github, Shie
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { connectTestnetWallet } from '@/lib/connect-wallet';
+import { prefetchSbtcBalance } from '@/lib/sbtc-balance';
 import { connectedWalletPublicKeyKey, requireTestnetStacksAccount } from '@/lib/stacks-wallet';
 import Dashboard from './dashboard/page';
 import styles from './page.module.css';
@@ -37,7 +38,9 @@ export default function Home() {
   const [walletError, setWalletError] = useState('');
 
   useEffect(() => {
-    setConnectedAddress(window.localStorage.getItem(connectedAddressKey) ?? '');
+    const address = window.localStorage.getItem(connectedAddressKey) ?? '';
+    setConnectedAddress(address);
+    prefetchSbtcBalance(address);
   }, []);
 
   async function disconnectWallet() {

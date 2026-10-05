@@ -68,7 +68,7 @@ assert.throws(() => verifyQuote(response, intent, trust, 101, '109'));
 assert.ok(validateIntent({ ...intent, amountSats: '1.5' }).amountSats);
 assert.ok(validateIntent({ ...intent, memo: '0x' + 'ff'.repeat(35) }).memo);
 assert.equal(isTerminalChainStatus('not_found'), false);
-assert.equal(isTerminalChainStatus('dropped_too_expensive'), true);
+assert.equal(isTerminalChainStatus('dropped_too_expensive'), false);
 assert.equal(extractRawTransaction({ txid: 'abc', transaction: 'abcd' }), undefined);
 console.log('Quote verification: valid relay format, all signed-field mutations, intent binding, expiry, balance, validation, unknown status passed.');
 function splitContractPrincipal(value: string): [string, string] { const [a, b] = value.split('.'); return [a, b]; }

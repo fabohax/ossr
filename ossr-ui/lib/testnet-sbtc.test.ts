@@ -25,6 +25,16 @@ globalThis.fetch = async input => {
   throw new Error(`Unexpected request: ${url}`);
 };
 try {
+  const faucetKey = process.env.SBTC_FAUCET_PRIVATE_KEY;
+  const sponsorKey = process.env.SPONSOR_PRIVATE_KEY;
+  delete process.env.SBTC_FAUCET_PRIVATE_KEY;
+  delete process.env.SPONSOR_PRIVATE_KEY;
+  const unavailable = await post({ address });
+  assert.equal(unavailable.status, 503);
+  assert.match((await unavailable.json()).error, /not configured.*No transfer was submitted/);
+  assert.equal(broadcasts, 0);
+  process.env.SBTC_FAUCET_PRIVATE_KEY = faucetKey;
+  if (sponsorKey) process.env.SPONSOR_PRIVATE_KEY = sponsorKey;
   assert.equal((await post({ address: getAddressFromPrivateKey(wallet, 'mainnet') })).status, 400);
   const challenge = await (await post({ address })).json();
   const claim = { address, ...challenge, signature: sign(challenge.message), publicKey: privateKeyToPublic(wallet) };

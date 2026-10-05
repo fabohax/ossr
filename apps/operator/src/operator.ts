@@ -215,11 +215,16 @@ export class OssrOperator {
     if (transaction.auth.authType !== AuthType.Sponsored) {
       throw new Error('Operator accepts only origin-signed sponsored transactions.');
     }
-    const chainNonce = this.nextSponsorNonce ?? await fetchNonce({
+    const fetchedNonce = await fetchNonce({
       address: this.address,
       network: this.config.network,
       client: { baseUrl: this.apiUrl },
     });
+    // External wallet activity can advance the account beyond our local cursor.
+    // Keep the cursor as a floor for transactions we have already signed.
+    const chainNonce = this.nextSponsorNonce !== undefined && this.nextSponsorNonce > fetchedNonce
+      ? this.nextSponsorNonce
+      : fetchedNonce;
     const sponsorNonce = await this.nonceStore.nextNonce(this.address, chainNonce);
     const signed = await sponsorTransaction({
       transaction,

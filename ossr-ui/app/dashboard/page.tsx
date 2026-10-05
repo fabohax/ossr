@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { connectTestnetWallet } from '@/lib/connect-wallet';
+import { cachedSbtcBalance, defaultSbtcContract, fetchDisplaySbtcBalance } from '@/lib/sbtc-balance';
 import { approvedWalletProviderIds, connectedWalletPublicKeyKey, readCachedStacksAccount, requireTestnetStacksAccount } from '@/lib/stacks-wallet';
 import { configuredQuoteTrust, validateIntent, verifyQuote, type TransferIntent } from '@/lib/quote-verification';
 import {
@@ -161,13 +162,13 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
   const [sponsorship, setSponsorship] = useState<SponsorshipResponse>();
   const [status, setStatus] = useState<SponsorshipStatus>();
   const [sbtcBalance, setSbtcBalance] = useState<SbtcBalance>();
+  const [balanceUnavailable, setBalanceUnavailable] = useState(false);
+  const balanceContract = relayInfo?.sbtcContract || process.env.NEXT_PUBLIC_OSSR_SBTC_CONTRACT || defaultSbtcContract;
   const [busy, setBusy] = useState<string>();
   const [faucetTxid, setFaucetTxid] = useState('');
   const [error, setError] = useState<DisplayError>();
   const [autoRelayChecked, setAutoRelayChecked] = useState(false);
   const [transactionModalOpen, setTransactionModalOpen] = useState(false);
-  const [statusObservationCount, setStatusObservationCount] = useState(0);
-  const statusObservation = useRef({ value: '', count: 0 });
   const recipientComboboxPortalRef = useRef<HTMLDivElement>(null);
 
   const totalSats = useMemo(() => {
@@ -206,10 +207,9 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
   }, [estimatedTotalSats, sbtcBalance]);
 
   const txid = sponsorship?.transactionId ?? sponsorship?.transaction_id;
-  const statusNeedsConfirmation = Boolean(status?.status.startsWith('dropped_'));
-  const provisionalStatus = Boolean(statusNeedsConfirmation && statusObservationCount < 3);
-  const failed = isFailedChainStatus(status?.status) && !provisionalStatus;
-  const terminal = isTerminalChainStatus(status?.status) && !provisionalStatus;
+  const provisionalStatus = Boolean(status?.status.startsWith('dropped_'));
+  const failed = isFailedChainStatus(status?.status);
+  const terminal = isTerminalChainStatus(status?.status);
 
   async function loadRelayInfo({ quiet = false }: { quiet?: boolean } = {}) {
     const info = await fetchRelayInfo(relayUrl);
@@ -312,19 +312,24 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
   }, [defaultSponsorFeeSats]);
 
   useEffect(() => {
+    setBalanceUnavailable(false);
     if (!origin) {
       setSbtcBalance(undefined);
       return;
     }
-    setSbtcBalance(undefined);
+    setSbtcBalance(current => current?.address === origin && current.token === `${balanceContract}::sbtc-token`
+      ? current : cachedSbtcBalance(origin, balanceContract));
     window.localStorage.setItem(connectedAddressKey, origin);
     let cancelled = false;
     const refresh = async () => {
       try {
-        const balance = await fetchSbtcBalance(origin, relayInfo?.sbtcContract);
-        if (!cancelled) setSbtcBalance(balance);
+        const balance = await fetchDisplaySbtcBalance(origin, balanceContract);
+        if (!cancelled) {
+          setSbtcBalance(balance);
+          setBalanceUnavailable(false);
+        }
       } catch {
-        if (!cancelled) setSbtcBalance(undefined);
+        if (!cancelled) setBalanceUnavailable(true);
       }
     };
     void refresh();
@@ -333,27 +338,31 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [origin, relayInfo?.sbtcContract]);
+  }, [origin, balanceContract]);
 
   useEffect(() => {
     if (!txid) return;
     if (terminal) return;
     let cancelled = false;
     const startedAt = Date.now();
+    let polling = false;
     const poll = async () => {
+      if (cancelled || polling) return;
+      polling = true;
       if (Date.now() - startedAt > 15 * 60 * 1000) setError({ title: 'Confirmation is taking longer than expected', message: 'Your transaction may still confirm. Follow the explorer link; do not resubmit to retry confirmation.' });
       try {
         const next = await fetchSponsorshipStatus(receipt?.intent.relayUrl ?? relayUrl, txid);
         if (!cancelled) {
-          const observed = statusObservation.current;
-          const count = observed.value === next.status ? observed.count + 1 : 1;
-          statusObservation.current = { value: next.status, count };
-          setStatusObservationCount(count);
           setStatus(next);
+          if (isTerminalChainStatus(next.status)) {
+            setError(current => current?.title === 'Confirmation unavailable' || current?.title === 'Confirmation is taking longer than expected' ? undefined : current);
+          }
         }
       } catch {
         if (!cancelled) setError({ title: 'Confirmation unavailable', message: 'This transaction may already be broadcast. Use its explorer link; do not resubmit to retry confirmation.' });
         // Keep the saved receipt visible while the relay is unavailable.
+      } finally {
+        polling = false;
       }
     };
     void poll();
@@ -456,8 +465,6 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
     window.localStorage.removeItem('ossr-ui:submitted-transfer');
     setSponsorship(undefined);
     setStatus(undefined);
-    statusObservation.current = { value: '', count: 0 };
-    setStatusObservationCount(0);
     setError(undefined);
   }
 
@@ -525,14 +532,78 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
       setQuoteResponse(undefined);
       throw new Error('The quote is obsolete. Request a fresh quote; no automatic resubmission was attempted.');
     }
-    statusObservation.current = { value: '', count: 0 };
-    setStatusObservationCount(0);
     const saved = { response, intent: snapshot, quote: quoteToSubmit };
     setReceipt(saved);
     setSponsorship(response);
     setTransactionModalOpen(true);
     try { window.localStorage.setItem('ossr-ui:submitted-transfer', JSON.stringify(saved)); } catch { setError({ title: 'Transaction broadcast', message: 'Browser storage is unavailable. Save the explorer link before refreshing.' }); }
   }
+
+  const OutcomeTitle = embedded ? 'h2' : DialogTitle;
+  const OutcomeDescription = embedded ? 'p' : DialogDescription;
+  const transactionContent = (
+    <div aria-live="polite" aria-atomic="true">
+{status?.status === 'success' ? (
+              <div className="grid place-items-center gap-5 px-6 pt-16 pb-8 text-center">
+                <div className="grid size-20 place-items-center rounded-full bg-primary/15 text-primary ring-1 ring-primary/25">
+                  <CheckCircle2 className="size-11" strokeWidth={1.8} />
+                </div>
+                <DialogHeader className="items-center">
+                  <OutcomeTitle className="text-2xl">Transaction successful</OutcomeTitle>
+                  <OutcomeDescription id="transaction-modal-description">Your sponsored sBTC transfer has confirmed on Stacks testnet.</OutcomeDescription>
+                </DialogHeader>
+                <dl className="w-full rounded-lg border bg-muted/30 p-4 text-sm">
+                  <ReviewRow label="Amount" value={`${receipt?.intent.amountSats ?? amountSats} sats`} emphasized />
+                  <ReviewRow label="Fee" value={`${(receipt?.quote ?? quoteResponse)?.quote.sponsorFee ?? '—'} sats`} />
+                  <ReviewRow label="Transaction" valueNode={<TransactionId txid={txid} successful />} />
+                  <ReviewRow label="Block height" value={status.blockHeight?.toString() ?? '—'} mono />
+                </dl>
+                <Button size="lg" className="h-10 w-full" onClick={resetForNewQuote}><CheckCircle2 /> Done</Button>
+              </div>
+            ) : (
+              <>
+                <DialogHeader className="border-b px-12 py-5 text-center sm:text-center">
+                  <OutcomeTitle className="text-lg">Transaction submitted</OutcomeTitle>
+                  <OutcomeDescription id="transaction-modal-description">
+                    Your signed transaction is being confirmed on Stacks testnet.
+                  </OutcomeDescription>
+                </DialogHeader>
+
+                <div className="grid gap-5 px-5 py-2 sm:px-6">
+                  <div className="flex items-center justify-between rounded-lg border bg-primary/5 px-4 py-3">
+                    <div><p className="text-xs text-muted-foreground">Amount</p><p className="mt-1 font-mono text-xl font-semibold">{receipt?.intent.amountSats ?? amountSats} sats</p></div>
+                    <Badge>{provisionalStatus ? 'Rechecking status' : status?.status ?? 'Broadcast'}</Badge>
+                  </div>
+
+                  <dl className="grid gap-2 rounded-lg border bg-muted/30 p-4 text-sm">
+                    <ReviewRow label="Sponsor fee" value={(receipt?.quote ?? quoteResponse) ? `${(receipt?.quote ?? quoteResponse)!.quote.sponsorFee} sats` : '—'} />
+                    <ReviewRow label="Maximum outflow" value={receipt ? `${BigInt(receipt.intent.amountSats) + BigInt(receipt.quote.quote.sponsorFee)} sats` : totalSats ? `${totalSats} sats` : '—'} emphasized />
+                    <Separator className="my-1" />
+                    <ReviewRow label="To" value={compact(receipt?.intent.recipient ?? recipient, 10)} mono />
+                    <ReviewRow label="Sponsor" value={(receipt?.quote ?? quoteResponse) ? compact((receipt?.quote ?? quoteResponse)!.quote.sponsorPrincipal, 10) : '—'} mono />
+                    <ReviewRow label="Expires at block" value={(receipt?.quote ?? quoteResponse)?.quote.expiresAtBlock ?? '—'} mono />
+                    <ReviewRow label="Transaction" valueNode={<TransactionId txid={txid} successful={false} />} />
+                  </dl>
+
+                  <div className="grid place-items-center gap-3 py-3 text-center">
+                    {failed ? <CircleAlert className="size-10 text-destructive" /> : <Loader2 className="size-10 animate-spin text-primary" />}
+                    <div>
+                      <p className="font-medium">{failed ? 'Transaction failed' : provisionalStatus ? 'Rechecking chain status' : 'Waiting for confirmation'}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{describeChainStatus(status)}</p>
+                    </div>
+                  </div>
+
+                  {error ? <ErrorAlert error={error} /> : null}
+                  {failed ? <TransactionOutcome status={status} txid={txid} failed amountSats={receipt?.intent.amountSats ?? amountSats} sponsorFeeSats={(receipt?.quote ?? quoteResponse)?.quote.sponsorFee} origin={receipt?.intent.origin ?? origin} /> : null}
+                </div>
+
+                <DialogFooter className="m-0 px-5 py-4 sm:px-6">
+                  <Button variant="outline" size="lg" className="w-full" onClick={resetForNewQuote} disabled={Boolean(busy)}><RefreshCw /> New transfer</Button>
+                </DialogFooter>
+              </>
+            )}
+    </div>
+  );
 
   const canQuote = Boolean(origin && sbtcBalance?.address === origin && !Object.keys(fieldErrors).length && !insufficientBalance);
   return (
@@ -583,13 +654,13 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
           <div className="mx-auto grid w-full max-w-7xl gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <StatusRow icon={<Radio />} label="Relay" value={relayInfo?.relayId ?? 'Not loaded'} ok={Boolean(relayInfo)} />
             <StatusRow icon={<Wallet />} label="Wallet" value={origin ? compact(origin) : 'Not connected'} ok={Boolean(origin)} />
-            <StatusRow icon={<CheckCircle2 />} label="Balance" value={sbtcBalance ? `${sbtcBalance.balanceSats} sats` : origin ? 'Loading' : '—'} ok={Boolean(sbtcBalance)} />
+            <StatusRow icon={<CheckCircle2 />} label="Balance" value={sbtcBalance ? `${sbtcBalance.balanceSats} sats` : origin ? balanceUnavailable ? 'Unavailable' : 'Loading' : '—'} ok={Boolean(sbtcBalance)} />
             <StatusRow icon={<CheckCircle2 />} label="Quote" value={quoteResponse ? `${quoteResponse.quote.sponsorFee} sats` : 'Not requested'} ok={Boolean(quoteResponse)} />
             <StatusRow icon={<Send />} label="Transaction" value={provisionalStatus ? 'Rechecking status' : status?.status ?? sponsorship?.status ?? 'Not submitted'} ok={Boolean(sponsorship) && !failed} />
           </div>
         </section> : null}
 
-        <div className={embedded ? 'flex w-full' : 'mx-auto flex w-full max-w-lg'}>
+        <div className={`${embedded ? 'flex w-full' : 'mx-auto flex w-full max-w-lg'}${embedded && sponsorship ? ' hidden' : ''}`}>
           <Card size="sm" className={embedded ? 'w-full border-white/10 bg-card/45 shadow-none backdrop-blur-xl' : 'w-full'}>
             <CardContent>
               <form className={embedded ? 'grid gap-3' : 'grid gap-4'} onSubmit={event => { event.preventDefault(); void createQuote(); }}>
@@ -631,7 +702,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                           </div>
                           <div className="flex items-center justify-between border-l border-border pl-4">
                             <span className="text-muted-foreground">Balance</span>
-                            <span className="font-medium">{sbtcBalance ? `${sbtcBalance.balanceSats} sats` : origin ? 'Loading' : '—'}</span>
+                            <span className="font-medium">{sbtcBalance ? `${sbtcBalance.balanceSats} sats` : origin ? balanceUnavailable ? 'Unavailable' : 'Loading' : '—'}</span>
                           </div>
                         </div>
                       </div>
@@ -723,71 +794,15 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
 
         </div>
 
-        <Dialog open={transactionModalOpen} onOpenChange={setTransactionModalOpen}>
-          <DialogContent className="max-h-[90vh] overflow-y-auto p-0 sm:max-w-xl" aria-describedby="transaction-modal-description">
-            {status?.status === 'success' ? (
-              <div className="grid place-items-center gap-5 px-6 pt-16 pb-8 text-center">
-                <div className="grid size-20 place-items-center rounded-full bg-primary/15 text-primary ring-1 ring-primary/25">
-                  <CheckCircle2 className="size-11" strokeWidth={1.8} />
-                </div>
-                <DialogHeader className="items-center">
-                  <DialogTitle className="text-2xl">Transaction successful</DialogTitle>
-                  <DialogDescription id="transaction-modal-description">Your sponsored sBTC transfer has confirmed on Stacks testnet.</DialogDescription>
-                </DialogHeader>
-                <dl className="w-full rounded-lg border bg-muted/30 p-4 text-sm">
-                  <ReviewRow label="Amount" value={`${receipt?.intent.amountSats ?? amountSats} sats`} emphasized />
-                  <ReviewRow label="Fee" value={`${(receipt?.quote ?? quoteResponse)?.quote.sponsorFee ?? '—'} sats`} />
-                  <ReviewRow label="Transaction" valueNode={<TransactionId txid={txid} successful />} />
-                  <ReviewRow label="Block height" value={status.blockHeight?.toString() ?? '—'} mono />
-                </dl>
-                <Button size="lg" className="h-10 w-full" onClick={resetForNewQuote}><CheckCircle2 /> Done</Button>
-              </div>
-            ) : (
-              <>
-                <DialogHeader className="border-b px-12 py-5 text-center sm:text-center">
-                  <DialogTitle className="text-lg">Transaction submitted</DialogTitle>
-                  <DialogDescription id="transaction-modal-description">
-                    Your signed transaction is being confirmed on Stacks testnet.
-                  </DialogDescription>
-                </DialogHeader>
+        {embedded ? (sponsorship ? transactionContent : null) : (
+          <Dialog open={transactionModalOpen} onOpenChange={setTransactionModalOpen}>
+            <DialogContent className="max-h-[90vh] overflow-y-auto p-0 sm:max-w-xl" aria-describedby="transaction-modal-description">
+              {transactionContent}
+            </DialogContent>
+          </Dialog>
+        )}
 
-                <div className="grid gap-5 px-5 py-2 sm:px-6">
-                  <div className="flex items-center justify-between rounded-lg border bg-primary/5 px-4 py-3">
-                    <div><p className="text-xs text-muted-foreground">Amount</p><p className="mt-1 font-mono text-xl font-semibold">{receipt?.intent.amountSats ?? amountSats} sats</p></div>
-                    <Badge>{provisionalStatus ? 'Rechecking status' : status?.status ?? 'Broadcast'}</Badge>
-                  </div>
-
-                  <dl className="grid gap-2 rounded-lg border bg-muted/30 p-4 text-sm">
-                    <ReviewRow label="Sponsor fee" value={(receipt?.quote ?? quoteResponse) ? `${(receipt?.quote ?? quoteResponse)!.quote.sponsorFee} sats` : '—'} />
-                    <ReviewRow label="Maximum outflow" value={receipt ? `${BigInt(receipt.intent.amountSats) + BigInt(receipt.quote.quote.sponsorFee)} sats` : totalSats ? `${totalSats} sats` : '—'} emphasized />
-                    <Separator className="my-1" />
-                    <ReviewRow label="To" value={compact(receipt?.intent.recipient ?? recipient, 10)} mono />
-                    <ReviewRow label="Sponsor" value={(receipt?.quote ?? quoteResponse) ? compact((receipt?.quote ?? quoteResponse)!.quote.sponsorPrincipal, 10) : '—'} mono />
-                    <ReviewRow label="Expires at block" value={(receipt?.quote ?? quoteResponse)?.quote.expiresAtBlock ?? '—'} mono />
-                    <ReviewRow label="Transaction" valueNode={<TransactionId txid={txid} successful={false} />} />
-                  </dl>
-
-                  <div className="grid place-items-center gap-3 py-3 text-center">
-                    {failed ? <CircleAlert className="size-10 text-destructive" /> : <Loader2 className="size-10 animate-spin text-primary" />}
-                    <div>
-                      <p className="font-medium">{failed ? 'Transaction failed' : provisionalStatus ? 'Rechecking chain status' : 'Waiting for confirmation'}</p>
-                      {!provisionalStatus ? <p className="mt-1 text-xs text-muted-foreground">{describeChainStatus(status)}</p> : null}
-                    </div>
-                  </div>
-
-                  {error ? <ErrorAlert error={error} /> : null}
-                  {failed ? <TransactionOutcome status={status} txid={txid} failed amountSats={receipt?.intent.amountSats ?? amountSats} sponsorFeeSats={(receipt?.quote ?? quoteResponse)?.quote.sponsorFee} origin={receipt?.intent.origin ?? origin} /> : null}
-                </div>
-
-                <DialogFooter className="m-0 px-5 py-4 sm:px-6">
-                  <Button variant="outline" size="lg" className="w-full" onClick={resetForNewQuote} disabled={Boolean(busy)}><RefreshCw /> New transfer</Button>
-                </DialogFooter>
-              </>
-            )}
-          </DialogContent>
-        </Dialog>
-
-        {error ? (
+        {error && !(embedded && sponsorship) ? (
           <ErrorAlert error={error} className="mt-6" />
         ) : null}
 

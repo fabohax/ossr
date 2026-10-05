@@ -171,8 +171,14 @@ export async function fetchSponsorshipStatus(relayUrl: string, txid: string): Pr
   return fetchJson(`${normalizeRelayUrl(relayUrl)}/v1/sponsorships/${pathTxid}`);
 }
 
+function stacksApiUrl(): string {
+  // Browser requests stay on the UI origin to avoid upstream CORS restrictions.
+  if (typeof window !== 'undefined') return '/stacks-api';
+  return process.env.STACKS_API_URL || process.env.NEXT_PUBLIC_STACKS_API_URL || 'https://api.testnet.hiro.so';
+}
+
 export async function fetchSbtcBalance(address: string, sbtcContract = 'SN3VMHXEN64ZZF71JQ5VESXDWTR301XTTXGF4J8F1.sbtc-token'): Promise<SbtcBalance> {
-  const apiUrl = process.env.NEXT_PUBLIC_STACKS_API_URL ?? 'https://api.testnet.hiro.so';
+  const apiUrl = stacksApiUrl();
   const response = await fetchJson<{ fungible_tokens?: Record<string, { balance?: string }> }>(
     `${apiUrl.replace(/\/$/, '')}/extended/v1/address/${address}/balances`,
   );
@@ -185,7 +191,7 @@ export async function fetchSbtcBalance(address: string, sbtcContract = 'SN3VMHXE
 }
 
 export async function fetchStacksTipHeight(): Promise<number> {
-  const apiUrl = process.env.NEXT_PUBLIC_STACKS_API_URL ?? 'https://api.testnet.hiro.so';
+  const apiUrl = stacksApiUrl();
   const info = await fetchJson<{ stacks_tip_height?: number }>(`${apiUrl.replace(/\/$/, '')}/v2/info`);
   if (!Number.isSafeInteger(info.stacks_tip_height) || (info.stacks_tip_height ?? -1) < 0) {
     throw new Error('Stacks API did not return a valid tip height.');
@@ -235,8 +241,8 @@ export async function prepareUnsignedSponsoredTransaction(input: {
   if (derivedAddress !== input.origin) {
     throw new Error('The wallet public key does not match the connected Stacks address. Reconnect the wallet and try again.');
   }
-  const nonce = input.nonce ?? await fetchNonce({ address: input.origin, network: 'testnet' }).catch(error => {
-    if (error instanceof TypeError) throw new NetworkRequestError('https://api.testnet.hiro.so (account nonce)', false, error);
+  const nonce = input.nonce ?? await fetchNonce({ address: input.origin, network: 'testnet', client: { baseUrl: stacksApiUrl() } }).catch(error => {
+    if (error instanceof TypeError) throw new NetworkRequestError(`${stacksApiUrl()} (account nonce)`, false, error);
     throw error;
   });
   const transaction = await makeUnsignedContractCall({
@@ -265,7 +271,9 @@ export function extractRawTransaction(result: unknown): string | undefined {
 }
 
 export function isFailedChainStatus(status: string | undefined): boolean {
-  return Boolean(status && (status.startsWith('abort_') || status.startsWith('dropped_')));
+  // Mempool drops can be superseded by an indexed chain receipt for this txid.
+  // Only an execution abort is evidence of an on-chain failure.
+  return Boolean(status?.startsWith('abort_'));
 }
 
 export function isTerminalChainStatus(status: string | undefined): boolean {
@@ -281,7 +289,7 @@ export function describeChainStatus(status: SponsorshipStatus | undefined): stri
   if (status.status.startsWith('abort_')) {
     return `The transaction was sponsored and broadcast, but chain execution aborted with ${status.status}.`;
   }
-  if (status.status === 'dropped_replace_by_fee') return 'The transaction was dropped after being replaced by fee.';
+  if (status.status.startsWith('dropped_')) return 'The API reports a mempool drop. Confirmation is still being checked; do not resubmit this transfer.';
   if (status.status === 'not_found') return 'The relay has a transaction ID, but the Stacks API does not currently find it.';
   return `Current chain status: ${status.status}.`;
 }

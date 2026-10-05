@@ -59,10 +59,12 @@ const recipient = getAddressFromPrivateKey(recipientKey, 'testnet');
 const adapterAddress = getAddressFromPrivateKey(randomPrivateKey(), 'testnet');
 const sbtcAddress = getAddressFromPrivateKey(randomPrivateKey(), 'testnet');
 let stacksHeight = 100;
+let sponsorChainNonce = 0;
 
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async input => {
   const url = String(input);
+  if (url.endsWith('/nonces')) return new Response(JSON.stringify({ possible_next_nonce: sponsorChainNonce }), { status: 200 });
   if (url.endsWith('/v2/info')) return new Response(JSON.stringify({ stacks_tip_height: stacksHeight }), { status: 200 });
   if (url.includes('/extended/v1/address/') && url.endsWith('/stx')) return new Response(JSON.stringify({ balance: '1000000', locked: '0' }), { status: 200 });
   if (url.endsWith('/v2/fees/transfer')) return new Response('1', { status: 200 });
@@ -353,6 +355,16 @@ try {
   assert.equal(simulationCalls, 1);
   assert.equal(broadcasts, 0);
   assert.equal((operator as unknown as { nextSponsorNonce: bigint }).nextSponsorNonce, 0n);
+
+  // A wallet using the sponsor account must not leave the relay stuck on its cached nonce.
+  sponsorChainNonce = 49;
+  await assert.rejects(operator.sponsorAndBroadcast(valid.serialize(), 1n, async signed => {
+    assert.equal(signed.sponsorNonce, 49n);
+    throw new Error('stop before broadcast');
+  }), /stop before broadcast/);
+  assert.equal(broadcasts, 0);
+  assert.deepEqual(await operator.nonceReservations(), []);
+  sponsorChainNonce = 0;
 
   const lifecycleOperator = new OssrOperator({ network: 'testnet', sponsorPrivateKey: randomPrivateKey(), logger: () => undefined });
   let lifecycleBroadcasts = 0;

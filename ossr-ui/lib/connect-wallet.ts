@@ -3,6 +3,7 @@ import { getInstalledProviders, getProviderFromId } from '@stacks/connect-ui';
 import { defineCustomElements } from '@stacks/connect-ui/loader';
 import { approvedWalletProviderIds, requireTestnetStacksAccount } from './stacks-wallet';
 import { enableDarkStacksWalletSelector } from './stacks-wallet-theme';
+import { prefetchSbtcBalance } from './sbtc-balance';
 
 type WalletProvider = { request(method: string, params: Record<string, unknown>): Promise<unknown> };
 
@@ -73,6 +74,7 @@ export async function connectTestnetWallet() {
   console.info('[wallet:connect] requesting testnet account', { providerId });
   try {
     const response = await requestTestnetWalletAccounts(providerId, provider);
+    prefetchSbtcBalance(requireTestnetStacksAccount(response).address);
     setSelectedProviderId(providerId);
     console.info('[wallet:connect] connected', { providerId });
     return response;

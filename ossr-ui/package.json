@@ -16,6 +16,7 @@
     "@stacks/encryption": "^7.6.0",
     "@stacks/transactions": "^7.6.0",
     "@types/mdx": "^2.0.14",
+    "@upstash/redis": "^1.39.0",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.3.0",
     "fumadocs-core": "^16.15.12",

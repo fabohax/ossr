@@ -1,10 +1,11 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createFaucetStore } from '../../../lib/faucet-store';
 import { verifyMessageSignatureRsv } from '@stacks/encryption';
 import { broadcastTransaction, getAddressFromPrivateKey, getAddressFromPublicKey, makeContractCall, noneCV, Pc, PostConditionMode, standardPrincipalCV, uintCV, validateStacksAddress } from '@stacks/transactions';
 
 export const runtime = 'nodejs';
+export const maxDuration = 60;
 const amount = 10n;
 const day = 86_400_000;
 function config() {
@@ -14,6 +15,9 @@ function config() {
 }
 function mac(value: string, key: string) { return createHmac('sha256', key).update(value).digest('hex'); }
 export async function POST(request: Request) {
+  if (!process.env.SBTC_FAUCET_PRIVATE_KEY && !process.env.SPONSOR_PRIVATE_KEY) {
+    return Response.json({ error: 'The testnet sBTC faucet is not configured on the server. No transfer was submitted.' }, { status: 503 });
+  }
   try {
     const { key, sponsor, directory, contract } = config();
     const body = await request.json();
@@ -31,38 +35,35 @@ export async function POST(request: Request) {
     const expiry = Number(message.match(/\nExpires: (\d+)\nNonce: [a-f0-9]{32}$/)?.[1]);
     if (!timingSafeEqual(Buffer.from(challenge, 'hex'), Buffer.from(expected, 'hex')) || !message.startsWith(`Request 10 satoshis of testnet sBTC from ${sponsor} to ${address}\nSite: ${site}\nExpires: `) || !expiry || expiry < Date.now() || expiry > Date.now() + 300_000) return Response.json({ error: 'Request expired. Please sign a fresh request.' }, { status: 400 });
     if (getAddressFromPublicKey(publicKey, 'testnet') !== address || !verifyMessageSignatureRsv({ message, signature, publicKey })) return Response.json({ error: 'Signature does not match the connected wallet.' }, { status: 403 });
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    const lock = join(directory, 'sponsor.lock');
-    try { await writeFile(lock, '', { flag: 'wx', mode: 0o600 }); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; return Response.json({ error: 'Sponsor is processing another request. Try again shortly.' }, { status: 409 }); }
+    const store = createFaucetStore(sponsor, directory);
+    if (!await store.acquire()) return Response.json({ error: 'Sponsor is processing another request. Try again shortly.' }, { status: 409 });
     try {
-      const claimFile = join(directory, `${address}.json`);
-      let previous: { at: number; txid: string; challenge: string } | undefined;
-      try { previous = JSON.parse(await readFile(claimFile, 'utf8')); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      const previous = await store.read(address);
       if (previous && (previous.challenge === challenge || Date.now() - previous.at < day)) {
         if (previous.challenge === challenge) return Response.json({ txid: previous.txid, amountSats: '10' });
         return Response.json({ error: 'You can request 10 sats once every 24 hours.', txid: previous.txid }, { status: 429 });
       }
       const [contractAddress, contractName] = contract.split('.');
       if (!/^(SN|ST)/.test(contractAddress) || !validateStacksAddress(contractAddress) || !contractName) throw new Error('Invalid testnet faucet contract configuration.');
-      const balanceResponse = await fetch(`https://api.testnet.hiro.so/extended/v1/address/${sponsor}/balances`, { cache: 'no-store' });
+      const balanceResponse = await fetch(`https://api.testnet.hiro.so/extended/v1/address/${sponsor}/balances`, { cache: 'no-store', signal: AbortSignal.timeout(8_000) });
       if (!balanceResponse.ok) throw new Error('Sponsor balance lookup failed.');
       const balances = await balanceResponse.json();
       const available = balances.fungible_tokens?.[`${contract}::sbtc-token`]?.balance ?? '0';
       if (!/^\d+$/.test(available) || BigInt(available) < amount) return Response.json({ error: 'The sponsor needs more testnet sBTC to send 10 sats. Please try again after it is funded.' }, { status: 503 });
-      const transaction = await makeContractCall({ network: 'testnet', senderKey: key, contractAddress, contractName, functionName: 'transfer', functionArgs: [uintCV(amount), standardPrincipalCV(sponsor), standardPrincipalCV(address), noneCV()], postConditionMode: PostConditionMode.Deny, postConditions: [Pc.principal(sponsor).willSendEq(amount).ft(`${contractAddress}.${contractName}`, 'sbtc-token')] });
+      const client = { fetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, { ...init, signal: AbortSignal.timeout(8_000) }) };
+      const transaction = await makeContractCall({ network: 'testnet', client, senderKey: key, contractAddress, contractName, functionName: 'transfer', functionArgs: [uintCV(amount), standardPrincipalCV(sponsor), standardPrincipalCV(address), noneCV()], postConditionMode: PostConditionMode.Deny, postConditions: [Pc.principal(sponsor).willSendEq(amount).ft(`${contractAddress}.${contractName}`, 'sbtc-token')] });
       const txid = transaction.txid();
       // Persist before broadcasting: a lost response must never cause a second payment.
-      await writeFile(claimFile, JSON.stringify({ at: Date.now(), txid, challenge }), { mode: 0o600 });
+      await store.save(address, { at: Date.now(), txid, challenge });
       let result;
-      try { result = await broadcastTransaction({ transaction, network: 'testnet' }); }
+      try { result = await broadcastTransaction({ transaction, network: 'testnet', client }); }
       catch { return Response.json({ txid, amountSats: '10', status: 'broadcast_unknown' }, { status: 202 }); }
       if ('error' in result) {
-        await unlink(claimFile);
+        await store.remove(address);
         return Response.json({ error: 'Sponsor transfer was rejected by testnet.' }, { status: 502 });
       }
       return Response.json({ txid, amountSats: '10' });
-    } finally { await unlink(lock); }
+    } finally { await store.release(); }
   } catch (error) {
     console.error('Testnet sBTC request failed', error instanceof Error ? error.message : 'Unknown error');
     return Response.json({ error: 'Testnet sBTC request could not be completed. Check the explorer before retrying.' }, { status: 503 });
