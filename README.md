@@ -1015,6 +1015,14 @@ Independent operators compete on:
 
 Over time, sponsored transactions could become a default wallet primitive, allowing Stacks applications to present a Bitcoin-native experience while preserving STX as the underlying network fee asset.
 
+### Potential future implementation: x402 payments on Stacks
+
+OSSR could become the bridge between x402's web-native payment authorization and Stacks' native sponsored transactions: **the permissionless execution and gas layer for x402 payments on Stacks.**
+
+A future x402 integration could route user-authorized payments through independent OSSR relays, which would validate the payment and sponsor its execution on Stacks. Relays would pay the STX network fee and receive reimbursement in a supported token, allowing users to complete supported payments without first acquiring STX.
+
+This is a potential future implementation beyond the current PoC. It would require a Stacks-compatible x402 integration, reviewed payment adapters, and explicit rules for authorization, replay protection, settlement, and sponsor reimbursement. Permissionless relay participation would retain each operator's policies for supported assets and actions.
+
 ---
 
 ## 20. Conclusion
