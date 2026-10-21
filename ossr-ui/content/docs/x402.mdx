@@ -1,0 +1,248 @@
+---
+title: x402 payments for agents
+description: Configure a paid relay, connect an agent wallet, authorize sponsorship payments, and recover safely from retries.
+---
+
+Agents can use **x402 v2** to pay OSSR relay service fees. The relay sponsors the Stacks transaction and delegates the separate x402 payment to an external facilitator. This guide covers both relay operators and agent developers.
+
+The service fee is additional to the signed quote’s atomic sBTC or USDCx reimbursement. The Stacks transfer currently runs on testnet; x402 uses the payment network configured by the operator. This integration does not add a native Stacks x402 payment scheme.
+
+## Prerequisites
+
+- Complete [operator setup](/docs/operators): a funded Stacks sponsor, quote-signing key, deployed supported adapter, and transaction simulation.
+- Choose a facilitator supporting x402 v2, the `exact` scheme, your payment network and token, and JSON `/verify` and `/settle` requests without authentication. The relay does not currently send facilitator API credentials.
+- Fund the agent’s Stacks account with the transfer asset plus reimbursement. Fund its x402-compatible account with the service-payment asset. These can be separate wallets on different networks.
+- Approve a trusted relay profile containing its public URL, quote key, adapter, payment network, token, recipient, signing metadata, timeout, and spending limits.
+
+Start with test assets on both networks. The Node.js example below uses an EVM payment signer; other networks require their own compatible x402 scheme implementation.
+
+## 1. Configure the relay
+
+Add these settings to the relay’s `.env.local`. Replace all placeholders with your deployment’s values; these are not live service addresses.
+
+```dotenv title="Relay .env.local"
+X402_ENABLED=true
+X402_FACILITATOR_URL=https://facilitator.example
+X402_RESOURCE_URL=https://relay.example/v1/sponsorships
+X402_NETWORK=eip155:84532
+X402_ASSET=0xYOUR_PAYMENT_TOKEN_ADDRESS
+X402_PAY_TO=0xYOUR_PAYMENT_RECIPIENT
+X402_AMOUNT=10000
+X402_EXTRA={"name":"USDC","version":"2"}
+X402_MAX_TIMEOUT_SECONDS=60
+X402_TIMEOUT_MS=15000
+X402_STORE_PATH=.ossr/x402-payments.json
+```
+
+For an EVM test deployment, `eip155:84532` identifies Base Sepolia. Verify the token address and signing metadata with your facilitator. With six token decimals, `10000` base units means `0.01` tokens. The payment network is configured independently of Stacks testnet.
+
+| Setting | Meaning |
+| --- | --- |
+| `X402_ENABLED` | Exactly `true` enables payment requirements; disabled by default |
+| `X402_FACILITATOR_URL` | Base URL; the relay appends `/verify` and `/settle` |
+| `X402_RESOURCE_URL` | Canonical public sponsorship URL advertised to agents |
+| `X402_NETWORK` | Payment network in CAIP-2 form |
+| `X402_ASSET` | Payment asset identifier supported by the facilitator |
+| `X402_PAY_TO` | Wallet receiving the service fee |
+| `X402_AMOUNT` | Positive integer service fee in token base units |
+| `X402_EXTRA` | Optional JSON signing metadata; omit if your scheme needs none |
+| `X402_MAX_TIMEOUT_SECONDS` | Authorization timeout advertised in the challenge; defaults to 60 |
+| `X402_TIMEOUT_MS` | Each facilitator request’s timeout; defaults to 15000 milliseconds |
+| `X402_STORE_PATH` | Durable bindings and receipts; defaults to `.ossr/x402-payments.json` |
+
+Browser agents also need their origin in `OSSR_CORS_ALLOWED_ORIGINS`. The relay allows `PAYMENT-SIGNATURE` and exposes `PAYMENT-REQUIRED` and `PAYMENT-RESPONSE` to those origins. Server agents do not need CORS.
+
+Start from the repository root:
+
+```bash
+npm run operator:serve
+```
+
+Check `GET /v1/info`: its `x402` property advertises the resource and requirements. Both POST `/v1/sponsorships` and the legacy `/v1/sponsor` alias require payment. Quotes, discovery, health, and status remain accessible without payment.
+
+## 2. Prepare the Stacks request
+
+Follow [transaction integration](/docs/integration) to obtain and verify a quote, build the exact adapter call and deny post-condition, and sign the origin authorization without broadcasting. An autonomous agent uses its approved Stacks signing service in place of browser-wallet approval.
+
+Verify relay identity, quote signature, origin, recipient, amount, adapter, sponsor fee, and block expiry against the approved intent. The quote’s sponsor fee caps reimbursement; the x402 budget separately caps the service payment.
+
+Save the verified request as `sponsorship.json`, replacing the placeholders:
+
+```json title="sponsorship.json"
+{
+  "quoteId": "0xYOUR_QUOTE_ID",
+  "transaction": "0xYOUR_ORIGIN_SIGNED_TRANSACTION",
+  "user": "ST_YOUR_ORIGIN_ADDRESS"
+}
+```
+
+Keep the exact serialized request throughout payment and retries. Never send origin keys to the relay or broadcast an incomplete sponsored transaction.
+
+## 3. Inspect the challenge
+
+```bash
+curl -i https://relay.example/v1/sponsorships \
+  -H 'Content-Type: application/json' \
+  --data-binary @sponsorship.json
+```
+
+An enabled relay returns HTTP `402` with a base64 JSON `PAYMENT-REQUIRED` header and a matching JSON body. Before authorizing, check protocol version `2`, scheme `exact`, trusted resource URL, network, token, recipient, timeout, signing metadata, and payment amount. Reserve the amount against the agent’s total budget.
+
+The selected `accepted` requirements must be copied unchanged into the payment payload, including `extra`. Use a compatible signer to generate the cryptographic authorization; an unsigned object cannot authorize payment. See the [x402 HTTP specification](https://github.com/x402-foundation/x402/blob/main/specs/transports-v2/http.md) for the wire format.
+
+## 4. Set up the agent client
+
+In your agent project, install:
+
+```bash
+npm install @x402/core @x402/evm viem
+```
+
+Keep the installed SDK version locked. The [official client example](https://github.com/x402-foundation/x402/tree/main/examples/typescript/clients/fetch) demonstrates scheme registration. This example explicitly handles the challenge so it can save a payment authorization for later recovery.
+
+Supply these settings through a secret manager or an untracked `agent.env` file:
+
+```dotenv title="Agent environment"
+RELAY_URL=https://relay.example
+PAYMENT_NETWORK=eip155:84532
+PAYMENT_ASSET=0xYOUR_PAYMENT_TOKEN_ADDRESS
+PAYMENT_RECIPIENT=0xYOUR_PAYMENT_RECIPIENT
+PAYMENT_MAX_UNITS=10000
+PAYMENT_MAX_TIMEOUT_SECONDS=60
+PAYMENT_EXTRA={"name":"USDC","version":"2"}
+PAYMENT_PRIVATE_KEY=0xYOUR_DEDICATED_TEST_PAYMENT_KEY
+```
+
+The code expects a previously verified `sponsorship.json`. Use a dedicated test wallet for local setup. In production, replace local key access with your approved wallet signer, and implement atomic total-budget reservation before signing. Keep secrets out of prompts, browser bundles, source control, and logs.
+
+```js title="pay-sponsorship.mjs"
+import { readFile, writeFile } from 'node:fs/promises';
+import { isDeepStrictEqual } from 'node:util';
+import { x402Client } from '@x402/core/client';
+import { ExactEvmScheme } from '@x402/evm/exact/client';
+import { privateKeyToAccount } from 'viem/accounts';
+
+const required = (name) => {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing ${name}`);
+  return value;
+};
+const endpoint = `${required('RELAY_URL').replace(/\/$/, '')}/v1/sponsorships`;
+const body = await readFile('sponsorship.json', 'utf8');
+const maxUnits = required('PAYMENT_MAX_UNITS');
+if (!/^[1-9][0-9]*$/.test(maxUnits)) throw new Error('Invalid budget');
+const decode = (value) => JSON.parse(Buffer.from(value, 'base64').toString());
+const post = (signature) => fetch(endpoint, {
+  method: 'POST', redirect: 'error',
+  headers: {
+    'Content-Type': 'application/json',
+    ...(signature ? { 'PAYMENT-SIGNATURE': signature } : {}),
+  },
+  body, signal: AbortSignal.timeout(60000),
+});
+
+const initial = await post();
+if (initial.status !== 402) throw new Error(`Expected 402, got ${initial.status}`);
+const header = initial.headers.get('PAYMENT-REQUIRED');
+if (!header) throw new Error('Missing challenge');
+const challenge = decode(header);
+const r = challenge.accepts?.[0];
+if (
+  challenge.x402Version !== 2 || challenge.accepts?.length !== 1 ||
+  challenge.resource?.url !== endpoint || r?.scheme !== 'exact' ||
+  r.network !== required('PAYMENT_NETWORK') ||
+  r.asset !== required('PAYMENT_ASSET') ||
+  r.payTo !== required('PAYMENT_RECIPIENT') ||
+  !/^[1-9][0-9]*$/.test(r.amount) || BigInt(r.amount) > BigInt(maxUnits) ||
+  r.maxTimeoutSeconds !== Number(required('PAYMENT_MAX_TIMEOUT_SECONDS')) ||
+  !isDeepStrictEqual(r.extra, process.env.PAYMENT_EXTRA
+    ? JSON.parse(process.env.PAYMENT_EXTRA) : undefined)
+) throw new Error('Challenge violates approved payment policy');
+
+// Reserve r.amount in the agent's durable total budget before signing.
+const signer = privateKeyToAccount(required('PAYMENT_PRIVATE_KEY'));
+const client = new x402Client().register(r.network, new ExactEvmScheme(signer));
+const payment = await client.createPaymentPayload(challenge);
+const signature = Buffer.from(JSON.stringify(payment)).toString('base64');
+// Save BEFORE submitting; retain this file if the request times out.
+await writeFile('payment-request.json', JSON.stringify({ endpoint, body, signature }),
+  { mode: 0o600 });
+const response = await post(signature);
+const receipt = response.headers.get('PAYMENT-RESPONSE');
+const result = await response.json();
+await writeFile('payment-result.json', JSON.stringify({
+  httpStatus: response.status, receipt: receipt ? decode(receipt) : null, result,
+}), { mode: 0o600 });
+if (!response.ok) throw new Error(`Relay rejected: ${result.error}`);
+console.log('Stacks transaction:', result.transactionId);
+```
+
+Run `node --env-file=agent.env pay-sponsorship.mjs`. Ignore `agent.env`, authorization, and receipt files in source control. Use a separate durable job directory per request to avoid overwriting an unresolved payment attempt.
+
+## 5. Retry without signing again
+
+Do not rerun the payment-creation script for an uncertain attempt. Reload the saved signature and exact request body:
+
+```js title="retry-sponsorship.mjs"
+import { readFile, writeFile } from 'node:fs/promises';
+const saved = JSON.parse(await readFile('payment-request.json', 'utf8'));
+const trustedEndpoint = `${process.env.RELAY_URL?.replace(/\/$/, '')}/v1/sponsorships`;
+if (saved.endpoint !== trustedEndpoint) throw new Error('Untrusted relay');
+const response = await fetch(saved.endpoint, {
+  method: 'POST', redirect: 'error',
+  headers: {
+    'Content-Type': 'application/json', 'PAYMENT-SIGNATURE': saved.signature,
+  },
+  body: saved.body, signal: AbortSignal.timeout(60000),
+});
+const receipt = response.headers.get('PAYMENT-RESPONSE');
+const result = await response.json();
+await writeFile('payment-retry-result.json', JSON.stringify({
+  httpStatus: response.status, result,
+  receipt: receipt ? JSON.parse(Buffer.from(receipt, 'base64').toString()) : null,
+}), { mode: 0o600 });
+console.log(response.status, result);
+```
+
+Run `node --env-file=agent.env retry-sponsorship.mjs` only after checking whether reconciliation is needed. Use bounded backoff and a maximum retry count.
+
+## 6. Track payment and transfer separately
+
+The relay verifies payment, validates and simulates the Stacks transaction, then settles payment before broadcasting. `PAYMENT-RESPONSE` contains the service-payment receipt. The response body’s `transactionId` identifies the Stacks transaction.
+
+`BROADCAST` is not chain confirmation. Poll `GET /v1/sponsorships/{txid}` with bounded backoff until a terminal outcome. Persist both transaction IDs and the quote ID in the agent’s job record. Payment success does not prove transfer success.
+
+## Troubleshooting and recovery
+
+| Outcome | Action |
+| --- | --- |
+| Initial HTTP 402 | Validate the challenge, reserve budget, and authorize once |
+| `INVALID_PAYMENT` / `PAYMENT_INVALID` | Check v2 encoding, exact requirements, signer, funding, and expiry; do not sign repeatedly |
+| `PAYMENT_REPLAY` | Stop: this authorization is bound to another request |
+| `PAYMENT_SETTLEMENT_FAILED` | Reconcile with the facilitator before authorizing another payment |
+| `PAYMENT_FACILITATOR_UNAVAILABLE` | A settlement timeout can have an unknown outcome; reconcile and use bounded backoff |
+| `PAYMENT_STORE_UNAVAILABLE` / `PAYMENT_CAPACITY_EXCEEDED` | Operator must restore the store or reconcile capacity |
+| `SPONSORSHIP_IN_PROGRESS` | Wait for relay reconciliation and inspect transaction status |
+| Network timeout or broadcast error | Keep the existing signature and receipt; reconcile before retrying the same request |
+| Quote expired or transaction changed | Reconcile the old payment first; a new quote requires a newly signed Stacks transaction and separate payment authorization |
+
+Settlement and broadcast are separate operations. Payment may settle even if broadcast fails, and there is no automatic refund. Receipt reuse still depends on quote and transaction policy checks; an expired quote can prevent recovery through the original request. Do not spend again just because a tool returned an error.
+
+## Agent permissions and operator persistence
+
+Expose a narrow agent tool such as `sponsorApprovedTransfer`, restricted to approved intents and trusted relays. Keep signing in a wallet service. Enforce recipient and token allowlists, per-payment caps, total budgets, and approval thresholds. Include reimbursement in total job cost. Concurrent jobs must reserve budget atomically, and unresolved outcomes must pause further spending for that job.
+
+Store requests, authorizations, receipts, and transaction IDs outside conversation memory. Run one relay process per `X402_STORE_PATH`; preserve it across restarts and back it up with the quote store. Programmatic API users must supply `x402.storePath` for persistence. The store has a 10,000-binding limit and fails closed at capacity. Archive only under a retention policy preserving facilitator replay guarantees.
+
+## Verify your setup
+
+From the repository root:
+
+```bash
+npm run typecheck
+npm run test:x402
+npm run test:relay-policy
+npm run test:quote-store
+```
+
+Exercise one test-wallet payment end to end before enabling autonomous spending: inspect the challenge, settle the service payment, confirm the Stacks transfer, retry the exact authorization, and ensure it cannot fund a different request. Repository tests mock facilitator responses; verify your deployed facilitator separately.

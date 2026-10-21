@@ -28,7 +28,7 @@
 
 ---
 
-Open Stacks Sponsor Relay is an open-source, multi-operator network that lets users execute Stacks transactions without holding STX. Independent relayers pay the network fee in STX and receive reimbursement in a supported token. The first PoC uses sBTC; future adapters could support other assets.
+Open Stacks Sponsor Relay is an open-source, multi-operator network that lets users execute Stacks transactions without holding STX. Independent relayers pay the network fee in STX and receive reimbursement in a supported token. The first PoC uses sBTC; an opt-in USDCx testnet adapter is also available through the relay API and CLI.
 
 Follow the [OSSR Nostr profile](https://njump.me/npub1qwfn9nmjysrycvn3xzqjvxucvgn9y83enl0p8lc5czv65l6szyrqmx8pkm). Profile credentials and publication instructions are documented in [docs/NOSTR.md](docs/NOSTR.md).
 
@@ -281,7 +281,7 @@ Infrastructure for monitoring sponsor balances, nonces, pending transactions, re
 
 Token-specific modules that define the reimbursement asset, base unit, pricing source, Clarity adapter, post-conditions, policy limits, and validation rules.
 
-The relay protocol is asset-aware, but support is never assumed merely because a token implements SIP-010. Each asset must be explicitly integrated and allowlisted. The first implementation supports sBTC denominated in sats. A later USDCx integration would require its own reviewed adapter, precision and rounding rules, pricing source, policies, and tests.
+The relay protocol is asset-aware, but support is never assumed merely because a token implements SIP-010. Each asset must be explicitly integrated and allowlisted. The first implementation supports sBTC denominated in sats. The USDCx testnet integration has a separate adapter, six-decimal integer amounts, an explicit fixed-fee policy, and contract and relay tests. See [USDCx setup](docs/usdcx-testnet.md); the browser transfer flow remains sBTC-only.
 
 ---
 
@@ -1015,13 +1015,42 @@ Independent operators compete on:
 
 Over time, sponsored transactions could become a default wallet primitive, allowing Stacks applications to present a Bitcoin-native experience while preserving STX as the underlying network fee asset.
 
-### Potential future implementation: x402 payments on Stacks
+### Implemented: x402 relay service payments
 
-OSSR could become the bridge between x402's web-native payment authorization and Stacks' native sponsored transactions: **the permissionless execution and gas layer for x402 payments on Stacks.**
+OSSR supports opt-in **x402 v2 `exact` payments** on its HTTP sponsorship endpoints through an external facilitator. Agents and other HTTP clients can pay a relay service fee on the operator's configured payment network while the relay sponsors the Stacks transaction. This integration is implemented; it does not introduce a native Stacks x402 payment scheme.
 
-A future x402 integration could route user-authorized payments through independent OSSR relays, which would validate the payment and sponsor its execution on Stacks. Relays would pay the STX network fee and receive reimbursement in a supported token, allowing users to complete supported payments without first acquiring STX.
+When enabled, the payment flow is:
 
-This is a potential future implementation beyond the current PoC. It would require a Stacks-compatible x402 integration, reviewed payment adapters, and explicit rules for authorization, replay protection, settlement, and sponsor reimbursement. Permissionless relay participation would retain each operator's policies for supported assets and actions.
+1. Submit a request to `POST /v1/sponsorships` (or the legacy `/v1/sponsor` alias). Without payment, the relay returns HTTP `402` with a base64 JSON `PAYMENT-REQUIRED` header and matching JSON body.
+2. Generate a signed payment authorization using the advertised requirements and retry the same sponsorship body with a base64 JSON x402 v2 `PAYMENT-SIGNATURE` header. The payload's `accepted` requirements must match the challenge exactly.
+3. The relay calls the facilitator's `/verify`, validates the signed Stacks transaction and quote, reserves the quote, and simulates the sponsored transaction. It calls `/settle` before broadcasting; settlement failure prevents broadcast.
+4. Successful settlement adds a base64 JSON `PAYMENT-RESPONSE` receipt, including if the subsequent broadcast fails.
+
+`GET /v1/info` advertises the configured x402 requirements. Quotes, discovery, health, and status endpoints remain accessible without payment. Browser clients can send the payment signature and read the payment response headers through the relay's configured CORS policy.
+
+To enable payments, configure the relay environment (see [`.env.example`](.env.example)):
+
+```dotenv
+X402_ENABLED=true
+X402_FACILITATOR_URL=https://facilitator.example
+X402_RESOURCE_URL=https://relay.example/v1/sponsorships
+X402_NETWORK=eip155:84532
+X402_AMOUNT=10000
+X402_ASSET=0xYOUR_PAYMENT_TOKEN_ADDRESS
+X402_PAY_TO=0xYOUR_PAYMENT_RECIPIENT
+X402_EXTRA={"name":"USDC","version":"2"}
+X402_MAX_TIMEOUT_SECONDS=60
+X402_TIMEOUT_MS=15000
+X402_STORE_PATH=.ossr/x402-payments.json
+```
+
+Replace the example URLs, network, asset, recipient, and amount with values supported by your facilitator. `X402_AMOUNT` is a positive integer in token base units; `X402_EXTRA` is optional scheme-specific JSON metadata. The facilitator must support x402 v2 `exact` payments and JSON `/verify` and `/settle` requests; the relay does not currently send facilitator API credentials. Payments are disabled by default.
+
+The x402 fee is an **additional service payment**: the signed quote's atomic sBTC or USDCx sponsor reimbursement remains required. Payment settlement and Stacks broadcast are separate operations, so a broadcast failure can leave the service payment settled. There is no automatic refund. Keep the receipt and retry the identical request; persisted bindings prevent reuse for a different request and allow a settled receipt to be reused after a restart. Unknown settlement outcomes must be reconciled with the facilitator.
+
+The CLI defaults to `.ossr/x402-payments.json` for payment bindings and receipts. Preserve and back up this file with the quote store, and run one relay process per payment store. Programmatic API users must provide `x402.storePath` for persistence. The store fails closed at its 10,000-payment capacity.
+
+See the [payment specification](docs/specs/x402-payments.md) for operational details and the [agent integration guide](ossr-ui/content/docs/x402.mdx) for client examples. Run `npm run test:x402` to verify payment handling and HTTP integration.
 
 ---
 

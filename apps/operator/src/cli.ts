@@ -1,3 +1,6 @@
+import { betaBudgetFromEnv } from './beta-budget.js';
+import { betaAccessFromEnv } from './beta-access.js';
+import { x402ConfigFromEnv } from './x402.js';
 import { config as loadEnv } from 'dotenv';
 import { OssrOperator } from './operator.js';
 import { createRelayServer } from './api.js';
@@ -7,6 +10,10 @@ import { JsonQuoteStore } from './quote-store.js';
 import { JsonNonceStore } from './nonce-store.js';
 
 loadEnv({ path: '.env.local', quiet: true });
+// Optional public USDCx settings for installations with a protected .env.local.
+loadEnv({ path: '.env.usdcx.local', quiet: true });
+// Public payment configuration for installations with a protected .env.local.
+loadEnv({ path: '.env.x402.local', quiet: true });
 loadEnv({ quiet: true });
 
 function required(name: string): string {
@@ -80,6 +87,7 @@ async function main(): Promise<void> {
     const server = createRelayServer({
       operator,
       stacksApiUrl: process.env.STACKS_API_URL,
+      x402: x402ConfigFromEnv(process.env),
       maximumFeeMicroStx: BigInt(process.env.OPERATOR_MAXIMUM_FEE_MICROSTX ?? '100000'),
       reimbursementService,
       reimbursementPollIntervalMs: Number(process.env.REIMBURSEMENT_POLL_INTERVAL_MS ?? '10000'),
@@ -95,9 +103,12 @@ async function main(): Promise<void> {
       adapterContractName: process.env.ADAPTER_CONTRACT_NAME?.trim(),
       sbtcContractAddress: process.env.SBTC_CONTRACT_ADDRESS?.trim(),
       sbtcContractName: process.env.SBTC_CONTRACT_NAME?.trim(),
+      usdcxAdapterContractAddress: process.env.USDCX_ADAPTER_CONTRACT_ADDRESS?.trim(),
+      usdcxSponsorFeeUnits: process.env.USDCX_SPONSOR_FEE_UNITS ? BigInt(process.env.USDCX_SPONSOR_FEE_UNITS) : undefined,
       quoteLifetimeBlocks: BigInt(process.env.QUOTE_TTL_BLOCKS ?? '10'),
       breakEvenFeeSats: BigInt(process.env.SBTC_BREAK_EVEN_FEE_SATS ?? '1'),
-      dynamicPricing: process.env.SBTC_DYNAMIC_PRICING !== 'false',
+      // Testnet STX is faucet-funded; market conversion is an opt-in cost policy.
+      dynamicPricing: process.env.SBTC_DYNAMIC_PRICING === 'true',
       estimatedTransactionBytes: BigInt(process.env.SBTC_ESTIMATED_TRANSACTION_BYTES ?? '600'),
       infrastructureCostSats: BigInt(process.env.SBTC_INFRASTRUCTURE_COST_SATS ?? '0'),
       riskReserveSats: BigInt(process.env.SBTC_RISK_RESERVE_SATS ?? '0'),
@@ -109,6 +120,10 @@ async function main(): Promise<void> {
       sponsorFeeSats: process.env.SBTC_SPONSOR_FEE_SATS
         ? BigInt(process.env.SBTC_SPONSOR_FEE_SATS)
         : undefined,
+      betaAccess: betaAccessFromEnv(process.env),
+      betaBudget: betaBudgetFromEnv(process.env),
+      betaAccountingToken: process.env.OSSR_BETA_ACCOUNTING_TOKEN,
+      pauseFilePath: process.env.OSSR_PAUSE_FILE || '.ossr/paused',
       corsAllowedOrigins: process.env.OSSR_CORS_ALLOWED_ORIGINS?.split(',').map(origin => origin.trim()).filter(Boolean),
       simulationApiUrl: process.env.STACKS_SIMULATION_API_URL?.trim(),
       simulationAuthToken: process.env.STACKS_SIMULATION_AUTH_TOKEN?.trim(),

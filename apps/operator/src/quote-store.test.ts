@@ -53,6 +53,16 @@ try {
 
   const mode = (await stat(path)).mode & 0o777;
   assert.equal(mode, 0o600);
+  const usdcxId = `0x${'d'.repeat(64)}`;
+  const usdcx = storedQuote(usdcxId);
+  usdcx.quote.action = 'usdcx-transfer';
+  usdcx.quote.reimbursementAsset = { assetId: 'usdcx', contract: 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.usdcx', unit: 'micro-usdcx', decimals: '6' };
+  usdcx.quote.adapterContract = 'ST000000000000000000002AMW42H.usdcx-sponsored-transfer-v1';
+  usdcx.intent.amountSats = 1_000_000n;
+  await restarted.putIssued(usdcx);
+  const persistedUsdcx = await new JsonQuoteStore(path).get(usdcxId);
+  assert.deepEqual(persistedUsdcx?.quote, usdcx.quote);
+  assert.equal(persistedUsdcx?.intent.amountSats, 1_000_000n);
 } finally {
   await rm(directory, { recursive: true });
 }

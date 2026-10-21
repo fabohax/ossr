@@ -1,3 +1,5 @@
+import { relayAccessHeaders } from './relay-access.ts';
+import { measureOperation, type DiagnosticStage } from './diagnostics.ts';
 import {
   AuthType,
   createAddress,
@@ -142,7 +144,7 @@ export async function requestQuote(input: {
 }): Promise<QuoteResponse> {
   return fetchJson(`${normalizeRelayUrl(input.relayUrl)}/v1/quotes`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...relayAccessHeaders(input.relayUrl) },
     body: JSON.stringify({
       origin: input.origin,
       recipient: input.recipient,
@@ -161,7 +163,7 @@ export async function submitSponsorship(input: {
 }): Promise<SponsorshipResponse> {
   return fetchJson(`${normalizeRelayUrl(input.relayUrl)}/v1/sponsorships`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...relayAccessHeaders(input.relayUrl) },
     body: JSON.stringify({ quoteId: input.quoteId, transaction: input.transaction, user: input.user }),
   });
 }
@@ -351,6 +353,10 @@ const ADAPTER_ERRORS: Record<number, string> = {
 };
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const stage: DiagnosticStage = url.endsWith('/v1/info') ? 'relay' : url.endsWith('/v1/quotes') ? 'quote' : url.endsWith('/v1/sponsorships') ? 'submission' : url.includes('/v1/sponsorships/') ? 'confirmation' : 'chain';
+  return measureOperation(stage, () => fetchJsonRequest<T>(url, init));
+}
+async function fetchJsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, signal: init?.signal ?? AbortSignal.timeout(15000), cache: 'no-store' }).catch(error => {
     if (error instanceof TypeError) throw new NetworkRequestError(url, init?.method === 'POST' && url.endsWith('/v1/sponsorships'), error);
     throw error;

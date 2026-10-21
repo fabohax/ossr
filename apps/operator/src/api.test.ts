@@ -59,6 +59,7 @@ const recipient = getAddressFromPrivateKey(recipientKey, 'testnet');
 const adapterAddress = getAddressFromPrivateKey(randomPrivateKey(), 'testnet');
 const sbtcAddress = getAddressFromPrivateKey(randomPrivateKey(), 'testnet');
 let stacksHeight = 100;
+let networkFeeRate = '1';
 let sponsorChainNonce = 0;
 
 const originalFetch = globalThis.fetch;
@@ -67,7 +68,7 @@ globalThis.fetch = async input => {
   if (url.endsWith('/nonces')) return new Response(JSON.stringify({ possible_next_nonce: sponsorChainNonce }), { status: 200 });
   if (url.endsWith('/v2/info')) return new Response(JSON.stringify({ stacks_tip_height: stacksHeight }), { status: 200 });
   if (url.includes('/extended/v1/address/') && url.endsWith('/stx')) return new Response(JSON.stringify({ balance: '1000000', locked: '0' }), { status: 200 });
-  if (url.endsWith('/v2/fees/transfer')) return new Response('1', { status: 200 });
+  if (url.endsWith('/v2/fees/transfer')) return new Response(networkFeeRate, { status: 200 });
   if (url === 'https://pricing.invalid') return new Response('Forbidden', { status: 403 });
   if (url === 'https://api.coinbase.com/v2/exchange-rates?currency=STX') return new Response(JSON.stringify({ data: { rates: { BTC: '0.000005' } } }), { status: 200 });
   if (url.includes('api.coingecko.com/api/v3/simple/price')) return new Response(JSON.stringify({ blockstack: { usd: 0.4 }, bitcoin: { usd: 80_000 } }), { status: 200 });
@@ -106,6 +107,44 @@ try {
   });
   const quote = quoteResponse.quote;
 
+  const usdcxRelay = new OssrRelayApi({
+    operator,
+    quotePrivateKey: randomPrivateKey(),
+    usdcxAdapterContractAddress: adapterAddress,
+    usdcxSponsorFeeUnits: 1000n,
+    simulateTransaction: async () => { throw new Error('USDCx reached simulation'); },
+  });
+  const usdcxIntent = { assetId: 'usdcx', origin, recipient, amountUnits: '1000000', maxSponsorFeeUnits: '1000' };
+  const usdcxQuote = (await usdcxRelay.quote(usdcxIntent)).quote;
+  assert.equal(usdcxQuote.action, 'usdcx-transfer');
+  assert.deepEqual(usdcxQuote.reimbursementAsset, { assetId: 'usdcx', contract: 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.usdcx', unit: 'micro-usdcx', decimals: '6' });
+  assert.equal(usdcxQuote.sponsorFee, '1000');
+  assert.deepEqual((await usdcxRelay.info() as { supportedActions: string[] }).supportedActions, ['sbtc-transfer', 'usdcx-transfer']);
+  await assert.rejects(relay.quote(usdcxIntent), /USDCx adapter and fee policy are not configured/);
+  await assert.rejects(usdcxRelay.quote({ ...usdcxIntent, amountUnits: '10000001' }), /exceeds 10 USDCx/);
+  await assert.rejects(usdcxRelay.quote({ ...usdcxIntent, maxSponsorFeeUnits: '999' }), /exceeds maxSponsorFeeUnits/);
+  await assert.rejects(usdcxRelay.quote({ ...usdcxIntent, amountUnits: '1.5' }), /positive decimal string/);
+  await assert.rejects(usdcxRelay.quote({ ...usdcxIntent, assetId: 'unknown' }), /Unsupported reimbursement asset/);
+  assert.throws(() => new OssrRelayApi({ operator, usdcxSponsorFeeUnits: 10001n }), /between 1 and 10000/);
+  async function usdcxTransaction(assetName: string, contractName = 'usdcx-sponsored-transfer-v1', total = 1001000n) {
+    return makeContractCall({
+      contractAddress: adapterAddress, contractName, functionName: 'sponsored-transfer',
+      functionArgs: [uintCV(1000000n), standardPrincipalCV(recipient), uintCV(1000n), bufferCV(Buffer.from(usdcxQuote.quoteId.slice(2), 'hex')), uintCV(BigInt(usdcxQuote.expiresAtBlock)), noneCV()],
+      senderKey: originKey, nonce: 0n, fee: 0n, sponsored: true, network: 'testnet',
+      postConditionMode: PostConditionMode.Deny,
+      postConditions: [Pc.principal(origin).willSendEq(total).ft('ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.usdcx', assetName)],
+    });
+  }
+  for (const [assetName, contractName, total, expectedError] of [
+    ['sbtc-token', 'usdcx-sponsored-transfer-v1', 1001000n, /configured USDCx asset/],
+    ['usdcx-token', 'sbtc-sponsored-transfer-v1', 1001000n, /quoted sponsored-transfer adapter/],
+    ['usdcx-token', 'usdcx-sponsored-transfer-v1', 1000000n, /transfer amount plus sponsor fee/],
+    ['usdcx-token', 'usdcx-sponsored-transfer-v1', 1001000n, /USDCx reached simulation/],
+  ] as const) {
+    const tx = await usdcxTransaction(assetName, contractName, total);
+    await assert.rejects(usdcxRelay.sponsor({ user: origin, quoteId: usdcxQuote.quoteId, transaction: `0x${tx.serialize()}` }), expectedError);
+  }
+
   const logarithmicRelay = new OssrRelayApi({
     operator,
     quotePrivateKey: randomPrivateKey(),
@@ -131,6 +170,13 @@ try {
   assert.equal(logarithmicInfo.limits.pricingModel, 'log2');
   assert.equal(logarithmicInfo.limits.pricingScaleSats, '100');
   assert.equal(logarithmicInfo.limits.pricingGrowthSats, '2');
+
+  networkFeeRate = '200';
+  const congestedInfo = await logarithmicRelay.info() as { limits: Record<string, string | boolean> };
+  assert.equal(congestedInfo.limits.dynamicPricing, false);
+  assert.equal(congestedInfo.limits.breakEvenFeeSats, '1');
+  assert.equal((await logarithmicRelay.quote({ origin, recipient, amountSats: '100', maxSponsorFeeSats: '2' })).quote.sponsorFee, '2', 'testnet congestion must not raise static user fees');
+  networkFeeRate = '1';
 
   const breakEvenRelay = new OssrRelayApi({
     operator,
@@ -516,7 +562,7 @@ try {
     assert.equal(firstSnapshot.body.operator.balanceMicroStx, '1000000');
     assert.deepEqual(firstSnapshot.body.requests, { total: 1, info: 0, metrics: 1, quotes: 0, sponsorships: 0, status: 0, other: 0 });
     assert.deepEqual(firstSnapshot.body.sponsorships, { rejections: 0, broadcasts: 0, confirmations: 0 });
-    assert.deepEqual(firstSnapshot.body.costs, { stxPaidMicroStx: '0', satsReimbursed: '0' });
+    assert.deepEqual(firstSnapshot.body.costs, { stxPaidMicroStx: '0', satsReimbursed: '0', usdcxReimbursedUnits: '0' });
     assert.ok(firstSnapshot.body.latencyMs.quote.count >= 1);
     assert.deepEqual(firstSnapshot.body.latencyMs.submissionToBroadcast, { count: 0, total: 0, average: null, last: null, max: null });
     assert.deepEqual(firstSnapshot.body.latencyMs.broadcastToConfirmation, { count: 0, total: 0, average: null, last: null, max: null });

@@ -49,6 +49,11 @@ plan:
       path: contracts/mocks/mock-sbtc-token.clar
       clarity-version: 6
     - transaction-type: emulated-contract-publish
+      contract-name: mock-usdcx-token
+      emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+      path: contracts/mocks/mock-usdcx-token.clar
+      clarity-version: 6
+    - transaction-type: emulated-contract-publish
       contract-name: operators-registry
       emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
       path: contracts/registry/operators-registry.clar
@@ -57,5 +62,10 @@ plan:
       contract-name: sbtc-sponsored-transfer-v1
       emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
       path: contracts/testing/sbtc-sponsored-transfer-v1.clar
+      clarity-version: 6
+    - transaction-type: emulated-contract-publish
+      contract-name: usdcx-sponsored-transfer-v1
+      emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+      path: contracts/testing/usdcx-sponsored-transfer-v1.clar
       clarity-version: 6
     epoch: '4.0'

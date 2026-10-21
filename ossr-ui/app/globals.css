@@ -57,8 +57,8 @@ body {
 }
 
 @theme inline {
-  --font-heading: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
-  --font-sans: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-nunito), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-nunito), ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono", "Geist Mono Fallback", ui-monospace, monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -124,4 +124,46 @@ body {
     color-scheme: dark;
     transition: background-color 9999s ease-out 0s;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+
+.docs-print-view {
+  width: min(100% - 2rem, 900px);
+  margin: 2rem auto;
+  padding: 2rem 2.5rem;
+  color: #17202a;
+  background: #fff;
+  font-family: Arial, sans-serif;
+  line-height: 1.6;
+}
+
+.docs-print-cover { margin: 0 0 4rem; }
+.docs-print-cover h1 { margin: 0; color: #000; font-size: 2.5rem; font-weight: 700; }
+.docs-print-cover p, .docs-print-description { color: #52606d; }
+.docs-print-section { margin: 0 0 3rem; }
+.docs-print-section h1 { padding-bottom: 0.5rem; border-bottom: 1px solid #d9e0e5; font-size: 1.8rem; }
+.docs-print-section h2 { margin-top: 2rem; font-size: 1.35rem; }
+.docs-print-section pre { overflow-wrap: anywhere; white-space: pre-wrap; background: #f2f5f7; padding: 1rem; }
+.docs-print-section table { border-collapse: collapse; width: 100%; }
+.docs-print-section th, .docs-print-section td { border: 1px solid #cbd5dc; padding: 0.4rem; text-align: left; }
+
+@media print {
+  @page { size: A4 portrait; margin: 18mm; }
+  body * { visibility: hidden !important; }
+  .docs-print-view, .docs-print-view * { visibility: visible !important; }
+  .docs-print-view { position: absolute; inset: 0; width: 100%; margin: 0; padding: 0; color: #17202a; }
+  .docs-print-view .aspect-video { display: none !important; }
+  .docs-print-section { break-before: page; }
+  .docs-print-cover + .docs-print-section { break-before: auto; }
+  a { color: inherit; text-decoration: none; }
+  pre, table, blockquote, img { break-inside: avoid; }
 }

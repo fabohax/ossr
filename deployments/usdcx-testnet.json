@@ -1,0 +1,9 @@
+{
+  "network": "testnet",
+  "contract": "ST2SY3PZHMVQMYN1W4SBJ9MPHW4P8J01ST7TVQ68X.usdcx-sponsored-transfer-v1",
+  "transactionId": "0x279f054da389e61d0bc6584f7e6864661766ea7fc942fd4fed66e8934ec64da1",
+  "blockHeight": 639011,
+  "clarityVersion": 4,
+  "feeMicroStx": "4758",
+  "sourceSha256": "098015da874d28fc70b9530cfb57de680bae091667b3a7f2f08fe5815907a402"
+}

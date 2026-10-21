@@ -9,3 +9,6 @@ tmp/
 **/.next/
 **/node_modules/
 **/*.tsbuildinfo
+
+.env.usdcx.local
+.env.x402.local

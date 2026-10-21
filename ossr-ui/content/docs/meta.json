@@ -1,4 +1,4 @@
 {
   "title": "OSSR Documentation",
-  "pages": ["index", "architecture", "integration", "quote-lifecycle", "relay-api", "security", "operators", "testing", "troubleshooting"]
+  "pages": ["index", "architecture", "integration", "x402", "quote-lifecycle", "relay-api", "security", "operators", "testing", "troubleshooting"]
 }

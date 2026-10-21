@@ -25,7 +25,8 @@ type QuoteResponse = {
     recipient?: string;
     adapterContract: string;
     functionName: 'sponsored-transfer';
-    reimbursementAsset: { contract: string };
+    action: 'sbtc-transfer' | 'usdcx-transfer';
+    reimbursementAsset: { assetId: 'sbtc' | 'usdcx'; contract: string; decimals: string; unit: string };
     sponsorFee: string;
     expiresAtBlock: string;
   };
@@ -55,26 +56,32 @@ function positiveInteger(name: string, fallback: string): bigint {
 async function main(): Promise<void> {
   const userPrivateKey = required('USER_PRIVATE_KEY');
   const recipient = required('RECIPIENT_ADDRESS');
-  const amountSats = positiveInteger('SBTC_TRANSFER_AMOUNT_SATS', '100');
-  const maxSponsorFeeSats = positiveInteger('SBTC_MAX_SPONSOR_FEE_SATS', process.env.SBTC_SPONSOR_FEE_SATS ?? '10');
+  const assetId = process.env.OSSR_ASSET_ID ?? 'sbtc';
+  if (assetId !== 'sbtc' && assetId !== 'usdcx') throw new Error('OSSR_ASSET_ID must be sbtc or usdcx.');
+  const usdcx = assetId === 'usdcx';
+  const amountSats = positiveInteger(usdcx ? 'USDCX_TRANSFER_AMOUNT_UNITS' : 'SBTC_TRANSFER_AMOUNT_SATS', usdcx ? '1000000' : '100');
+  const maxSponsorFeeSats = positiveInteger(usdcx ? 'USDCX_MAX_SPONSOR_FEE_UNITS' : 'SBTC_MAX_SPONSOR_FEE_SATS', usdcx ? '1000' : process.env.SBTC_SPONSOR_FEE_SATS ?? '10');
   const apiUrl = (process.env.OSSR_API_URL ?? 'http://127.0.0.1:3000').replace(/\/$/, '');
   const stacksApiUrl = (process.env.STACKS_API_URL ?? 'https://api.testnet.hiro.so').replace(/\/$/, '');
   const user = getAddressFromPrivateKey(userPrivateKey, network);
   if (recipient === user) throw new Error('RECIPIENT_ADDRESS must differ from the user address.');
 
-  const memo = process.env.SBTC_MEMO_HEX ? `0x${process.env.SBTC_MEMO_HEX.replace(/^0x/, '')}` : undefined;
+  const memoHex = usdcx ? process.env.USDCX_MEMO_HEX : process.env.SBTC_MEMO_HEX;
+  const memo = memoHex ? `0x${memoHex.replace(/^0x/, '')}` : undefined;
   const quoteResponse = await fetchJson<QuoteResponse>(`${apiUrl}/v1/quotes`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
       origin: user,
       recipient,
-      amountSats: amountSats.toString(),
-      maxSponsorFeeSats: maxSponsorFeeSats.toString(),
+      ...(usdcx ? { assetId, amountUnits: amountSats.toString(), maxSponsorFeeUnits: maxSponsorFeeSats.toString() } : { amountSats: amountSats.toString(), maxSponsorFeeSats: maxSponsorFeeSats.toString() }),
       ...(memo ? { memo } : {}),
     }),
   });
   const quote = quoteResponse.quote;
+  if (quote.action !== `${assetId}-transfer` || quote.reimbursementAsset.assetId !== assetId) throw new Error('Relay returned a quote for a different asset.');
+  if (usdcx && (quote.reimbursementAsset.contract !== 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.usdcx' || quote.reimbursementAsset.decimals !== '6' || quote.reimbursementAsset.unit !== 'micro-usdcx')) throw new Error('Unexpected USDCx token metadata.');
+  if (BigInt(quote.sponsorFee) <= 0n || BigInt(quote.sponsorFee) > maxSponsorFeeSats) throw new Error('Sponsor fee exceeds the requested policy.');
   if (quote.origin !== user) throw new Error('Relay returned a quote for a different origin.');
   const [contractAddress, contractName] = splitContractPrincipal(quote.adapterContract);
   const totalSats = amountSats + BigInt(quote.sponsorFee);
@@ -97,7 +104,7 @@ async function main(): Promise<void> {
     sponsored: true,
     network,
     postConditionMode: PostConditionMode.Deny,
-    postConditions: [Pc.principal(user).willSendEq(totalSats).ft(asContractId(quote.reimbursementAsset.contract), 'sbtc-token')],
+    postConditions: [Pc.principal(user).willSendEq(totalSats).ft(asContractId(quote.reimbursementAsset.contract), usdcx ? 'usdcx-token' : 'sbtc-token')],
   });
 
   const submittedAtMs = Date.now();
@@ -111,8 +118,10 @@ async function main(): Promise<void> {
     event: 'client.submitted',
     user,
     recipient,
-    amountSats: amountSats.toString(),
-    sponsorFeeSats: quote.sponsorFee,
+    assetId,
+    amountUnits: amountSats.toString(),
+    sponsorFeeUnits: quote.sponsorFee,
+    ...(!usdcx ? { amountSats: amountSats.toString(), sponsorFeeSats: quote.sponsorFee } : {}),
     quoteId: quote.quoteId,
     quotePublicKey: quoteResponse.quotePublicKey,
     ...response,

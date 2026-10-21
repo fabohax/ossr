@@ -1,0 +1,12 @@
+.git
+node_modules
+**/node_modules
+**/target
+.next
+**/.next
+**/.next-readiness
+.turbo
+**/.turbo
+coverage
+**/coverage
+*.tsbuildinfo

@@ -95,8 +95,14 @@ Dynamic pricing results are cached for 60 seconds by default. If either pricing
 dependency fails or returns invalid data, the engine fails closed with
 `PRICING_UNAVAILABLE` and does not issue an unsafe quote.
 
-When dynamic pricing is disabled, `SBTC_BREAK_EVEN_FEE_SATS` is used as the
-static cost floor instead.
+The testnet CLI defaults to dynamic pricing disabled because its STX is
+faucet-funded. `SBTC_BREAK_EVEN_FEE_SATS` supplies the static floor (1 sat by
+default), keeping small transfers at 2 sats and 1,000-sat transfers at 8 sats
+regardless of testnet congestion or market prices. Operators can explicitly
+set `SBTC_DYNAMIC_PRICING=true` to recover live market-valued costs. Existing
+deployments with that setting must change it to `false` and restart the relay
+to adopt the testnet default. The actual network fee estimator and STX fee
+limit still apply when sponsoring transactions.
 
 ## Fixed-fee override
 
@@ -117,7 +123,7 @@ below the operator's calculated costs.
 | `SBTC_LOG_SCALE_SATS` | `100` | Transfer-size divisor used before applying the logarithm |
 | `SBTC_LOG_GROWTH_SATS` | `2` | Satoshis charged for every curve step |
 | `SBTC_SPONSOR_FEE_SATS` | unset | Optional fixed-fee override |
-| `SBTC_DYNAMIC_PRICING` | `true` | Enables the live cost floor |
+| `SBTC_DYNAMIC_PRICING` | `false` | Opts into the live cost floor |
 | `SBTC_ESTIMATED_TRANSACTION_BYTES` | `600` | Conservative sponsored transaction size estimate |
 | `SBTC_INFRASTRUCTURE_COST_SATS` | `0` | Per-transaction operating cost allowance |
 | `SBTC_RISK_RESERVE_SATS` | `0` | Per-transaction failure or volatility reserve |

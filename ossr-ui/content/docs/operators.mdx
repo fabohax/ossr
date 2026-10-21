@@ -25,8 +25,10 @@ Minimum operational inputs include:
 | `SBTC_LOG_GROWTH_SATS` | Sats added per doubling; defaults to `2` |
 
 Unless `SBTC_SPONSOR_FEE_SATS` sets a fixed override, the relay quotes
-`2 × ceil(log2(1 + ceil(amount / 100)))`, then raises that result to the live
-operator cost floor when necessary. The active model, curve parameters, and
+`2 × ceil(log2(1 + ceil(amount / 100)))`, then raises that result to the configured
+static cost floor (1 sat by default). Testnet uses faucet-funded STX, so live
+market cost recovery is opt-in with `SBTC_DYNAMIC_PRICING=true`. Existing
+relays should set it to `false` and restart to use stable testnet pricing. The active model, curve parameters, and
 cost floor are published by `/v1/info` for accurate wallet previews.
 
 ```bash

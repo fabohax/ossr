@@ -15,6 +15,7 @@ function config() {
 }
 function mac(value: string, key: string) { return createHmac('sha256', key).update(value).digest('hex'); }
 export async function POST(request: Request) {
+  if (process.env.NEXT_PUBLIC_OSSR_FIXTURE === 'true') return Response.json({ error: 'Faucet disabled in fixture mode. No transfer was submitted.' }, { status: 503 });
   if (!process.env.SBTC_FAUCET_PRIVATE_KEY && !process.env.SPONSOR_PRIVATE_KEY) {
     return Response.json({ error: 'The testnet sBTC faucet is not configured on the server. No transfer was submitted.' }, { status: 503 });
   }

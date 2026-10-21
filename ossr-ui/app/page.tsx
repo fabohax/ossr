@@ -3,7 +3,8 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { ArrowRight, Blocks, Check, ChevronRight, CircleDot, Code2, Github, ShieldCheck, Sparkles, TerminalSquare, Users, WalletCards } from 'lucide-react';
+import { ArrowRight, Check, ChevronRight, Code2, Github, Server, TerminalSquare, Users } from 'lucide-react';
+import { Layer, Wallet } from 'iconsax-reactjs';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { connectTestnetWallet } from '@/lib/connect-wallet';
@@ -77,8 +78,8 @@ export default function Home() {
   return <main className={styles.page}>
     <div className={styles.ambient} aria-hidden="true" />
     <header className={styles.header}>
-      <Link href="/" className={styles.brand} aria-label="OSSR home"><span>OSSR</span></Link>
-      <nav className={styles.nav} aria-label="Primary navigation"><Link href="/docs">DOCS</Link><Link href="/operators">OPERATORS</Link><Link href="/developers">DEVELOPERS</Link></nav>
+      <Link href="/" className={styles.brand} aria-label="OSSR home"><Image src="/ossr-logo-120.png" alt="OSSR" width={60} height={24} /></Link>
+      <nav className={styles.nav} aria-label="Primary navigation"><Link href="/docs">DOCS</Link><Link href="/docs/x402">x402</Link><Link href="/operators">OPERATORS</Link><Link href="/developers">DEVELOPERS</Link></nav>
       <div className={`${styles.walletControls} relative`}>
         {connectedAddress ? (
           <Button variant="ghost" size="icon" className={styles.disconnect} onClick={() => void disconnectWallet()} aria-label="Disconnect wallet" title="Disconnect wallet">
@@ -95,23 +96,25 @@ export default function Home() {
 
     <section className={styles.hero}>
       <div className={styles.heroCopy}>
-        <div className={styles.eyebrow}><Sparkles /> Open infrastructure for Stacks</div>
+        <div className={styles.eyebrow}><Image src="/stacks-white.svg" alt="" width={14} height={14} /> Open infrastructure for Stacks</div>
         <h1>Transactions should feel <span>effortless.</span></h1>
         <p className={styles.lede}>OSSR is an open protocol for sponsored Stacks transactions. Users move sBTC without holding STX, while independent operators handle network fees.</p>
         <div className={styles.heroActions}>
           <Button asChild size="lg" className={styles.primary}><Link href="/dashboard">Open dashboard <ArrowRight /></Link></Button>
           <Button asChild size="lg" variant="outline" className={styles.secondary}><Link href="/docs">Explore the protocol <ChevronRight /></Link></Button>
         </div>
-        <div className={styles.trust}><span><Check /> Non-custodial</span><span><Check /> Open source</span><span><Check /> Built for sBTC</span></div>
+        <div className={styles.trust}><span><Check /> Non-custodial</span><span><Check /> Open source</span><span><Check /> Built for Bitcoin</span></div>
       </div>
-      <div className={styles.visual} aria-label="OSSR transaction flow">
+      <div className={styles.visual} aria-label="How a sponsored Stacks transaction works">
         <div className={styles.glow} />
-        <FlowNode className={styles.userNode} icon={<WalletCards />} label="USER WALLET" title="Sign intent" />
-        <div className={styles.flow}><span /></div>
-        <div className={styles.core}><div className={styles.orbit}><i /><i /><i /></div><Image className={styles.coreLogo} src="/ossr.svg" alt="" width={50} height={50} /><small>OSSR PROTOCOL</small><strong>Route + sponsor</strong></div>
-        <div className={styles.flow}><span /></div>
-        <FlowNode className={styles.chainNode} icon={<Blocks />} label="STACKS" title="Settle onchain" live />
-        <div className={styles.chip}><ShieldCheck /> Atomic settlement</div>
+        <div className={styles.flowStages}>
+          <article className={styles.stage}><div className={styles.stageIcon}><Wallet size={24} variant="Linear" /></div><span className={styles.stageNumber}>01</span><h3>User</h3><p>Signs the sBTC transfer</p></article>
+          <ArrowRight className={styles.stageArrow} aria-hidden="true" />
+          <article className={styles.stage}><div className={styles.stageIcon}><Server size={24} /></div><span className={styles.stageNumber}>02</span><h3>Operator</h3><p>Pays the fee and broadcasts</p></article>
+          <ArrowRight className={styles.stageArrow} aria-hidden="true" />
+          <article className={styles.stage}><div className={styles.stageIcon}><Layer size={24} variant="Linear" /></div><span className={styles.stageNumber}>03</span><h3>Stacks chain</h3><p>Confirms the transaction</p></article>
+        </div>
+        <p className={styles.flowCaption}>The user signs once. The operator covers the network fee.</p>
       </div>
     </section>
 
@@ -135,7 +138,7 @@ export default function Home() {
     </section>
 
     <section className={styles.final}><span className={styles.kicker}>READY TO GET STARTED?</span><h2>The open relay layer for Stacks.</h2><p>Connect your wallet and experience sponsored transactions on testnet.</p><Button size="lg" className={styles.primary} onClick={() => setTransferOpen(true)}>Connect to OSSR <ArrowRight /></Button></section>
-    <footer className={styles.footer}><div className={styles.brand}><span>OSSR</span></div><p>Open Stacks Sponsor Relay. Built for the plebs.</p><div><Link href="/docs">Protocol</Link><Link href="/operators">Operators</Link><Link href="/developers">Developers</Link><a href={nostrProfileUrl} aria-label="OSSR on Nostr" className={styles.nostrLink}>Nostr</a><a href="https://github.com/OSSR-protocol" aria-label="OSSR Protocol on GitHub"><Github /></a></div></footer>
+    <footer className={styles.footer}><div className={styles.brand}><Image src="/ossr-logo-120.png" alt="OSSR" width={60} height={24} /></div><p>Open Stacks Sponsor Relay. Built for the Plebs.</p><div><Link href="/docs">Protocol</Link><Link href="/operators">Operators</Link><Link href="/developers">Developers</Link><a href={nostrProfileUrl} aria-label="OSSR on Nostr" className={styles.nostrLink}>Nostr</a><a href="https://github.com/OSSR-protocol" aria-label="OSSR Protocol on GitHub"><Github /></a></div></footer>
 
     <Dialog open={transferOpen} onOpenChange={setTransferOpen}>
       <DialogContent className="w-[min(26.5rem,calc(100vw-1rem))] max-h-[calc(100vh-2rem)] max-w-none overflow-y-auto border-white/15 bg-background/65 p-0 shadow-2xl backdrop-blur-2xl sm:max-w-none">
@@ -149,6 +152,3 @@ export default function Home() {
   </main>;
 }
 
-function FlowNode({className,icon,label,title,live}:{className:string;icon:React.ReactNode;label:string;title:string;live?:boolean}) {
-  return <div className={`${styles.node} ${className}`}><div className={styles.nodeIcon}>{icon}</div><div><small>{label}</small><strong>{title}</strong></div>{live?<span className={styles.live}><CircleDot/> LIVE</span>:<i />}</div>;
-}

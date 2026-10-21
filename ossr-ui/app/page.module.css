@@ -8,3 +8,18 @@
 @media(max-width:900px){.header{grid-template-columns:1fr auto}.nav{display:none}.hero{grid-template-columns:1fr;padding-top:70px}.visual{min-height:490px}.stats{grid-template-columns:1fr 1fr}.stats div:nth-child(2){border-right:0}.stats div:nth-child(-n+2){border-bottom:1px solid #ffffff14}.principles,.paths{grid-template-columns:1fr}.howHeader{grid-template-columns:1fr}.footer{grid-template-columns:1fr auto}.footer p{display:none}}@media(max-width:600px){.header,.hero,.stats,.section,.how,.paths,.final,.footer{width:min(100% - 32px,1180px)}.header{height:72px}.connect,.disconnect{height:38px}.disconnect{width:38px}.hero{min-height:auto;padding:75px 0}.hero h1{font-size:3.5rem}.lede{font-size:16px}.heroActions{align-items:stretch;flex-direction:column}.trust{gap:12px}.visual{min-height:450px;transform:scale(.88)}.stats{margin-bottom:60px}.stats div{min-height:100px;padding:18px}.stats strong{font-size:19px}.section{padding:65px 0 90px}.principles{gap:12px}.principle{min-height:230px}.principle h3{margin-top:38px}.how{padding:80px 0}.howHeader{margin-bottom:50px}.steps{grid-template-columns:1fr;gap:45px}.step,.step:first-child,.step:last-child{padding:0 0 0 24px;border-left:1px solid #ffffff17}.step>span{margin-bottom:16px}.paths{padding-bottom:90px}.path{min-height:570px;padding:28px}.path h2{font-size:35px}.terminal,.code{width:95%}.final{min-height:480px}.footer>div:last-child{gap:15px}.footer>div:last-child a:not(:last-child){display:none}}@media(prefers-reduced-motion:reduce){.orbit,.flow span{animation:none}.principle{transition:none}}
 
 @media(max-width:600px){.footer>div:last-child a.nostrLink{display:inline-flex}}
+
+@media(max-width:900px){.header{height:auto;min-height:104px;grid-template-rows:64px auto;padding-bottom:16px;row-gap:8px}.nav{display:flex;grid-column:1 / -1;grid-row:2;justify-content:center;gap:clamp(16px,4vw,34px);flex-wrap:wrap}.walletControls{grid-column:2;grid-row:1}.nav a{font-size:12px}}
+
+.visual{min-height:0;gap:26px;transform:none}
+.glow{width:360px;height:360px}
+.flowStages{position:relative;z-index:1;display:flex;width:100%;align-items:center;justify-content:center;gap:8px}
+.stage{display:flex;flex:1;max-width:156px;aspect-ratio:1;flex-direction:column;align-items:flex-start;justify-content:space-between;padding:16px;border:1px solid #6ee7b740;border-radius:18px;background:linear-gradient(145deg,#151f1bf5,#0b1110f5);box-shadow:0 18px 48px #0005}
+.stageIcon{display:grid;width:42px;height:42px;place-items:center;border:1px solid #6ee7b74a;border-radius:13px;background:#6ee7b714;color:var(--mint)}
+.stageIcon svg{width:22px;height:22px}
+.stageNumber{align-self:flex-end;color:#74817c;font-family:var(--font-geist-mono);font-size:11px;letter-spacing:.08em}
+.stage h3{margin:auto 0 4px;font-size:20px;font-weight:700;letter-spacing:-.03em}
+.stage p{max-width:140px;margin:0;color:#a1adaa;font-size:14px;line-height:1.35}
+.stageArrow{width:21px;height:21px;flex:0 0 21px;color:var(--mint)}
+.flowCaption{position:relative;z-index:1;margin:0;color:#9ca6a3;font-size:15px;line-height:1.5;text-align:center}
+@media(max-width:600px){.visual{gap:18px}.flowStages{flex-direction:column;gap:10px}.stage{width:min(100%,190px);flex:none;padding:18px}.stageArrow{transform:rotate(90deg)}.stage h3{font-size:21px}.stage p{font-size:14px}.flowCaption{max-width:280px;font-size:14px}}

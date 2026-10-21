@@ -6,6 +6,13 @@
 
 **Target:** a grant-reviewable Stacks testnet demonstration, not a production relay
 
+**UI readiness update (October 14, 2026):** See the
+[task checklist](../../ossr-ui/GRANT-READINESS.md),
+[executed checks and remaining evidence](../../ossr-ui/READINESS-VALIDATION.md),
+[deployment and wallet runbook](../../ossr-ui/DEPLOYMENT-RUNBOOK.md), and
+[wallet evidence template](../../ossr-ui/EVIDENCE-TEMPLATE.md). Public wallet
+acceptance and grant-ready completion are not claimed.
+
 ## 1. Outcome
 
 The pre-grant prototype proves one narrow user story:

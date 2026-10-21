@@ -1,3 +1,6 @@
+import { BetaBudget, BetaBudgetError, type BetaBudgetConfig } from './beta-budget.js';
+import { stat } from 'node:fs/promises';
+import { BetaAccess, BetaAccessError, type BetaAccessConfig } from './beta-access.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import {
@@ -31,13 +34,26 @@ import {
 import { OssrOperator } from './operator.js';
 import { SbtcReimbursementService } from './reimbursement.js';
 import { OperatorRegistry, type OperatorRegistryReader, toEntry } from './registry.js';
+import { X402Payments, X402Error, encodePayment, type X402Config } from './x402.js';
 import { MemoryQuoteStore, type QuoteStore } from './quote-store.js';
+
+const USDCX_ASSET = { assetId: 'usdcx', contract: 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.usdcx', unit: 'micro-usdcx', decimals: '6' } as const;
 
 const MAX_BODY_BYTES = 256 * 1024;
 const HEX = /^0x(?:[0-9a-fA-F]{2})+$/;
 
 export type RelayApiConfig = {
   operator: OssrOperator;
+  /** Opt-in invited testnet beta; credentials authorize exactly one transaction origin. */
+  betaAccess?: BetaAccessConfig;
+  betaBudget?: BetaBudgetConfig;
+  betaStuckTransactionMs?: number;
+  /** Separate operator-only read credential for loopback accounting/alert data. */
+  betaAccountingToken?: string;
+  /** Existing file pauses new quotes/sponsorships; status/reconciliation remain available. */
+  pauseFilePath?: string;
+  /** Optional additional HTTP sponsorship payment, settled by an external facilitator. */
+  x402?: X402Config;
   stacksApiUrl?: string;
   /** Reject fees above this amount even when the estimator returns one. */
   maximumFeeMicroStx?: bigint;
@@ -59,6 +75,9 @@ export type RelayApiConfig = {
   policyVersion?: string;
   adapterContractAddress?: string;
   adapterContractName?: string;
+  /** USDCx is opt-in and requires its own deployed adapter and fixed fee in micro-USDCx. */
+  usdcxAdapterContractAddress?: string;
+  usdcxSponsorFeeUnits?: bigint;
   sbtcContractAddress?: string;
   sbtcContractName?: string;
   quoteLifetimeBlocks?: bigint;
@@ -97,15 +116,15 @@ export type SponsorResponse = {
   sponsorship_id?: string;
 };
 
-export type SbtcTransferQuote = {
+export type TransferQuote = {
   protocolVersion: '1';
   quoteId: string;
   relayId: string;
   network: 'testnet';
   sponsorPrincipal: string;
   origin: string;
-  action: 'sbtc-transfer';
-  reimbursementAsset: { assetId: 'sbtc'; contract: string; unit: 'sat'; decimals: '8' };
+  action: 'sbtc-transfer' | 'usdcx-transfer';
+  reimbursementAsset: { assetId: 'sbtc'; contract: string; unit: 'sat'; decimals: '8' } | { assetId: 'usdcx'; contract: string; unit: 'micro-usdcx'; decimals: '6' };
   adapterContract: string;
   functionName: 'sponsored-transfer';
   argumentsHash: string;
@@ -117,13 +136,16 @@ export type SbtcTransferQuote = {
   keyId: string;
 };
 
+/** Backwards-compatible name for existing consumers. */
+export type SbtcTransferQuote = TransferQuote;
+
 export type QuoteResponse = {
-  quote: SbtcTransferQuote & { signature: string };
+  quote: TransferQuote & { signature: string };
   quotePublicKey: string;
 };
 
 export type StoredQuote = {
-  quote: SbtcTransferQuote & { signature: string };
+  quote: TransferQuote & { signature: string };
   intent: QuoteIntent;
   consumedBy?: string;
 };
@@ -131,6 +153,7 @@ export type StoredQuote = {
 export type QuoteIntent = {
   origin: string;
   recipient: string;
+  /** Internal legacy field: base units of the asset recorded in the quote. */
   amountSats: bigint;
   maxSponsorFeeSats: bigint;
   memo?: string;
@@ -148,7 +171,7 @@ export type OperatorMetricsSnapshot = {
     submissionToBroadcast: LatencySnapshot;
     broadcastToConfirmation: LatencySnapshot;
   };
-  costs: { stxPaidMicroStx: string; satsReimbursed: string };
+  costs: { stxPaidMicroStx: string; satsReimbursed: string; usdcxReimbursedUnits: string };
 };
 
 export type LatencySnapshot = { count: number; total: number; average: number | null; last: number | null; max: number | null };
@@ -160,6 +183,9 @@ type LatencyAccumulator = { count: number; total: number; last: number | null; m
  * transaction bytes: the relay signs and broadcasts in the same request.
  */
 export class OssrRelayApi {
+  private readonly betaBudget?: BetaBudget;
+  private readonly betaAccess?: BetaAccess;
+  private readonly payments?: X402Payments;
   private readonly stacksApiUrl: string;
   private readonly maximumFeeMicroStx: bigint;
   private readonly healthPollIntervalMs: number;
@@ -176,6 +202,7 @@ export class OssrRelayApi {
     confirmations: 0,
     stxPaidMicroStx: 0n,
     satsReimbursed: 0n,
+    usdcxReimbursedUnits: 0n,
     latencyMs: {
       quote: { count: 0, total: 0, last: null, max: null } as LatencyAccumulator,
       submissionToBroadcast: { count: 0, total: 0, last: null, max: null } as LatencyAccumulator,
@@ -183,10 +210,16 @@ export class OssrRelayApi {
     },
   };
   private readonly confirmedTransactions = new Set<string>();
-  private readonly broadcasts = new Map<string, { at: number; reimbursementSats: bigint }>();
+  private readonly broadcasts = new Map<string, { at: number; reimbursementSats: bigint; assetId: 'sbtc' | 'usdcx' }>();
   private pricingCache?: { expiresAt: number; floorSats: bigint; networkFeeMicroStx: bigint; networkCostSats: bigint };
 
   constructor(private readonly config: RelayApiConfig) {
+    if (config.betaAccountingToken && !/^[A-Za-z0-9_-]{43,128}$/.test(config.betaAccountingToken)) throw new Error('Beta accounting token must contain 43–128 base64url characters.');
+    if (config.betaStuckTransactionMs !== undefined && (!Number.isSafeInteger(config.betaStuckTransactionMs) || config.betaStuckTransactionMs < 1)) throw new Error('Beta stuck transaction duration must be a positive safe integer.');
+    if (config.betaAccountingToken && config.betaAccess && Object.values(config.betaAccess.walletTokens).includes(config.betaAccountingToken)) throw new Error('Operator accounting credentials must differ from invited-wallet credentials.');
+    this.betaBudget = config.betaBudget ? new BetaBudget(config.betaBudget) : undefined;
+    this.betaAccess = config.betaAccess ? new BetaAccess(config.betaAccess) : undefined;
+    this.payments = config.x402 ? new X402Payments(config.x402) : undefined;
     this.stacksApiUrl = (config.stacksApiUrl ?? 'https://api.testnet.hiro.so').replace(/\/$/, '');
     this.maximumFeeMicroStx = config.maximumFeeMicroStx ?? 100_000n;
     this.healthPollIntervalMs = config.healthPollIntervalMs ?? 10_000;
@@ -196,6 +229,8 @@ export class OssrRelayApi {
     this.simulationApiUrl = (config.simulationApiUrl ?? this.stacksApiUrl).replace(/\/$/, '');
     this.simulationTimeoutMs = config.simulationTimeoutMs ?? 15_000;
     if (!Number.isSafeInteger(this.simulationTimeoutMs) || this.simulationTimeoutMs < 1) throw new Error('simulationTimeoutMs must be a positive safe integer.');
+    if (config.usdcxSponsorFeeUnits !== undefined && (config.usdcxSponsorFeeUnits <= 0n || config.usdcxSponsorFeeUnits > 10_000n)) throw new Error('usdcxSponsorFeeUnits must be between 1 and 10000 micro-USDCx.');
+    if (config.usdcxAdapterContractAddress && (!validateStacksAddress(config.usdcxAdapterContractAddress) || !/^ST/.test(config.usdcxAdapterContractAddress))) throw new Error('USDCx adapter requires a testnet standard principal.');
     this.quoteStore = config.quoteStore ?? new MemoryQuoteStore();
   }
 
@@ -228,10 +263,12 @@ export class OssrRelayApi {
     return server;
   }
 
-  async sponsor(input: unknown): Promise<SponsorResponse> {
+  async sponsor(input: unknown, beforeBroadcast?: () => Promise<void>): Promise<SponsorResponse> {
+    await this.requireNotPaused();
     const submittedAt = Date.now();
     this.log('relay.transaction_state', { status: 'REQUESTED' });
     const { transaction: encoded, user, quoteId } = parseSponsorRequest(input);
+    this.betaAccess?.requireWallet(user);
     if (!quoteId) throw new RelayError(400, 'QUOTE_REQUIRED', 'A relay-issued quoteId is required for sponsorship.');
     const quote = await this.requireUsableQuote(quoteId, user);
     const transaction = deserializeOriginTransaction(encoded, user);
@@ -259,9 +296,17 @@ export class OssrRelayApi {
     let sponsored: Awaited<ReturnType<OssrOperator['sponsor']>>;
     let broadcast: Awaited<ReturnType<OssrOperator['broadcast']>>;
     let simulationPassed = false;
+    let signaturePrepared = false;
     try {
+      if (this.betaBudget) {
+        if (quote.quote.reimbursementAsset.assetId !== 'sbtc') throw new RelayError(422, 'BETA_ASSET_LIMIT', 'Budget-controlled beta supports sBTC transfers only.');
+        await this.betaBudget.reserve({ quoteId, origin: user, recipient: quote.intent.recipient, amountSats: quote.intent.amountSats.toString(), sponsorFeeSats: quote.quote.sponsorFee, reservedMicroStx: feeMicroStx.toString() });
+      }
       const result = await this.config.operator.sponsorAndBroadcast(encoded, feeMicroStx, async signed => {
+        signaturePrepared = true;
+        await this.betaBudget?.attachTransaction(quoteId, signed.txid);
         await this.simulate(signed.transaction, signed.txid, minimumSimulationBlockHeight);
+        await beforeBroadcast?.();
         simulationPassed = true;
         this.log('relay.transaction_state', { status: 'SIMULATED', transactionId: signed.txid });
       });
@@ -269,27 +314,32 @@ export class OssrRelayApi {
       this.log('relay.transaction_state', { status: 'SPONSORED', transactionId: sponsored.txid });
       broadcast = result.broadcast;
     } catch (error) {
-      if (!simulationPassed) await this.quoteStore.release(quoteId, requestHash);
+      if (!simulationPassed && (!this.betaBudget || !signaturePrepared)) await this.quoteStore.release(quoteId, requestHash);
+      if (this.betaBudget) await this.betaBudget.recordFailure(quoteId, toRelayError(error).code);
       await this.recordFailure();
       throw error;
     }
+    const usesReimbursementWorker = Boolean(this.config.reimbursementService && quote.quote.reimbursementAsset.assetId === 'sbtc');
     const sponsorshipId = broadcast.txid;
-    const result = { status: 'BROADCAST' as const, operator: this.config.operator.address, transaction_id: broadcast.txid, fee_microstx: feeMicroStx.toString(), sponsorship_id: this.config.reimbursementService ? sponsorshipId : undefined };
+    const result = { status: 'BROADCAST' as const, operator: this.config.operator.address, transaction_id: broadcast.txid, fee_microstx: feeMicroStx.toString(), sponsorship_id: usesReimbursementWorker ? sponsorshipId : undefined };
     const broadcastAt = Date.now();
     this.counters.broadcasts += 1;
     this.counters.stxPaidMicroStx += feeMicroStx;
     recordLatency(this.counters.latencyMs.submissionToBroadcast, broadcastAt - submittedAt);
-    this.broadcasts.set(broadcast.txid.toLowerCase(), { at: broadcastAt, reimbursementSats: BigInt(quote.quote.sponsorFee) });
+    this.broadcasts.set(broadcast.txid.toLowerCase(), { at: broadcastAt, reimbursementSats: BigInt(quote.quote.sponsorFee), assetId: quote.quote.reimbursementAsset.assetId });
     await this.quoteStore.complete(quoteId, requestHash, result);
     await this.recordSuccess(broadcast.txid);
-    if (this.config.reimbursementService) {
-      await this.config.reimbursementService.create({ sponsorshipId, stacksTxId: broadcast.txid, feePaidMicroStx: feeMicroStx });
+    if (usesReimbursementWorker) {
+      await this.config.reimbursementService!.create({ sponsorshipId, stacksTxId: broadcast.txid, feePaidMicroStx: feeMicroStx });
     }
     this.log('relay.transaction_state', { status: 'BROADCAST', transactionId: broadcast.txid });
     return result;
   }
 
   async info(): Promise<object> {
+    await this.betaBudget?.ready();
+    const paused = await this.isPaused();
+    const usdcxSupported = this.usdcxEnabled() && !this.betaBudget;
     const adapterContract = this.adapterContract();
     const sbtcContract = this.sbtcContract();
     const dynamicPricing = this.config.dynamicPricing ? await this.dynamicCostFloor() : undefined;
@@ -298,7 +348,8 @@ export class OssrRelayApi {
       relayId: this.config.relayId ?? this.config.operatorId ?? this.config.operator.address,
       network: 'testnet',
       sponsorPrincipal: this.config.operator.address,
-      supportedActions: ['sbtc-transfer'],
+      supportedActions: ['sbtc-transfer', ...(usdcxSupported ? ['usdcx-transfer'] : [])],
+      usdcx: usdcxSupported ? { adapterContract: `${this.config.usdcxAdapterContractAddress}.usdcx-sponsored-transfer-v1`, reimbursementAsset: USDCX_ASSET, sponsorFeeUnits: this.config.usdcxSponsorFeeUnits!.toString(), maximumTransferUnits: '10000000', maximumSponsorFeeUnits: '10000' } : undefined,
       adapterContract,
       sbtcContract,
       limits: {
@@ -325,8 +376,9 @@ export class OssrRelayApi {
         publicKey: this.quotePublicKey(),
         status: 'active',
       }] : [],
-      quotesEnabled: Boolean(this.config.quotePrivateKey && adapterContract && sbtcContract),
-      sponsorshipsEnabled: true,
+      quotesEnabled: !paused && Boolean(this.config.quotePrivateKey && ((adapterContract && sbtcContract) || usdcxSupported)),
+      sponsorshipsEnabled: !paused,
+      x402: this.payments?.required(),
     };
   }
 
@@ -350,31 +402,45 @@ export class OssrRelayApi {
       costs: {
         stxPaidMicroStx: this.counters.stxPaidMicroStx.toString(),
         satsReimbursed: this.counters.satsReimbursed.toString(),
+        usdcxReimbursedUnits: this.counters.usdcxReimbursedUnits.toString(),
       },
     };
   }
 
   async quote(input: unknown): Promise<QuoteResponse> {
+    await this.requireNotPaused();
     const startedAt = Date.now();
     if (!this.config.quotePrivateKey) throw new RelayError(503, 'QUOTES_DISABLED', 'QUOTE_PRIVATE_KEY is not configured.');
-    const intent = parseQuoteRequest(input);
-    const adapterContract = this.adapterContract();
+    if (!isRecord(input)) throw new RelayError(400, 'INVALID_REQUEST', 'Quote body must be an object.');
+    const assetId = input.assetId ?? 'sbtc';
+    if (assetId !== 'sbtc' && assetId !== 'usdcx') throw new RelayError(422, 'UNSUPPORTED_ASSET', 'Unsupported reimbursement asset.');
+    const usdcx = assetId === 'usdcx';
+    if (usdcx && !this.usdcxEnabled()) throw new RelayError(503, 'USDCX_DISABLED', 'USDCx adapter and fee policy are not configured.');
+    const intent = parseQuoteRequest(input, usdcx);
+    this.betaAccess?.requireWallet(intent.origin);
+    if (this.betaBudget) {
+      await this.betaBudget.ready();
+      if (usdcx) throw new RelayError(422, 'BETA_ASSET_LIMIT', 'Budget-controlled beta supports sBTC transfers only.');
+      this.betaBudget.checkTransfer(intent.amountSats);
+    }
+    if (usdcx && intent.amountSats > 10_000_000n) throw new RelayError(422, 'AMOUNT_OUT_OF_POLICY', 'USDCx transfer exceeds 10 USDCx.');
+    const adapterContract = usdcx ? `${this.config.usdcxAdapterContractAddress}.usdcx-sponsored-transfer-v1` : this.adapterContract();
     const sbtcContract = this.sbtcContract();
     if (!adapterContract || !sbtcContract) throw new RelayError(503, 'QUOTE_POLICY_INCOMPLETE', 'Adapter and sBTC contract configuration are required.');
-    const sponsorFee = await this.sponsorFeeSats(intent.amountSats);
-    if (sponsorFee > intent.maxSponsorFeeSats) throw new RelayError(422, 'SPONSOR_FEE_TOO_HIGH', 'Quoted sponsor fee exceeds maxSponsorFeeSats.');
+    const sponsorFee = usdcx ? this.config.usdcxSponsorFeeUnits! : await this.sponsorFeeSats(intent.amountSats);
+    if (sponsorFee > intent.maxSponsorFeeSats) throw new RelayError(422, 'SPONSOR_FEE_TOO_HIGH', usdcx ? 'Quoted sponsor fee exceeds maxSponsorFeeUnits.' : 'Quoted sponsor fee exceeds maxSponsorFeeSats.');
     const issuedAt = await this.currentStacksHeight();
     const expiresAt = issuedAt + this.quoteLifetimeBlocks();
     const quoteId = `0x${randomBytes(32).toString('hex')}`;
-    const unsigned: SbtcTransferQuote = {
+    const unsigned: TransferQuote = {
       protocolVersion: '1',
       quoteId,
       relayId: this.config.relayId ?? this.config.operatorId ?? this.config.operator.address,
       network: 'testnet',
       sponsorPrincipal: this.config.operator.address,
       origin: intent.origin,
-      action: 'sbtc-transfer',
-      reimbursementAsset: { assetId: 'sbtc', contract: sbtcContract, unit: 'sat', decimals: '8' },
+      action: usdcx ? 'usdcx-transfer' : 'sbtc-transfer',
+      reimbursementAsset: usdcx ? USDCX_ASSET : { assetId: 'sbtc', contract: sbtcContract, unit: 'sat', decimals: '8' },
       adapterContract,
       functionName: 'sponsored-transfer',
       argumentsHash: argumentsHash({ ...intent, quoteId, sponsorFee, expiresAt }),
@@ -428,6 +494,15 @@ export class OssrRelayApi {
     validateSimulationResponse(body, expectedTxid, minimumBlockHeight);
   }
 
+  private async isPaused(): Promise<boolean> {
+    if (!this.config.pauseFilePath) return false;
+    try { await stat(this.config.pauseFilePath); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw new RelayError(503, 'PAUSE_STATE_UNAVAILABLE', 'Cannot read operator pause state. New sponsorships are disabled.'); }
+  }
+  private async requireNotPaused(): Promise<void> {
+    if (await this.isPaused()) throw new RelayError(503, 'SPONSORSHIPS_PAUSED', 'The operator paused new sponsorships. Check existing receipts; do not resubmit pending payments.');
+  }
+
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.method === 'OPTIONS') {
       respondOptions(request, response, this.corsAllowedOrigins);
@@ -479,6 +554,23 @@ export class OssrRelayApi {
       respond(request, response, 200, toEntry(operator), this.corsAllowedOrigins);
       return;
     }
+    if (request.method === 'GET' && request.url === '/v1/beta/accounting' && this.betaBudget) {
+      const credential = request.headers.authorization?.match(/^Bearer ([A-Za-z0-9_-]{43,128})$/)?.[1];
+      if (!this.config.betaAccountingToken || !credential || createHash('sha256').update(credential).digest('hex') !== createHash('sha256').update(this.config.betaAccountingToken).digest('hex') || request.headers['x-forwarded-for'] || request.headers.forwarded || request.headers['x-real-ip']) { respond(request, response, 403, { error: 'FORBIDDEN', message: 'Direct loopback access with the separate operator accounting credential is required.' }, []); return; }
+      if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? '')) { respond(request, response, 403, { error: 'FORBIDDEN', message: 'Beta accounting is available only over loopback.' }, []); return; }
+      const entries = await this.betaBudget.snapshot();
+      for (const entry of entries.filter(entry => entry.txid)) {
+        try { const status = await this.config.operator.transactionStatus(entry.txid!); await this.betaBudget.reconcile(entry.txid!, status.raw, this.config.operator.address, `${this.sbtcContract()}::sbtc-token`); }
+        catch { /* Unknown/mismatched outcomes remain reserved and visible. */ }
+      }
+      const reconciled = await this.betaBudget.snapshot();
+      const alerts: { code: string; quoteId?: string; transactionId?: string | null }[] = reconciled.filter(entry => entry.actualMicroStx === undefined && Date.now() - Date.parse(entry.createdAt) >= (this.config.betaStuckTransactionMs ?? 600_000)).map(entry => ({ code: 'STUCK_OR_AMBIGUOUS', quoteId: entry.quoteId, transactionId: entry.txid ?? null }));
+      const health = await this.config.operator.health();
+      if (!health.healthy) alerts.push({ code: health.balanceMicroStx === undefined ? 'SPONSOR_HEALTH_UNAVAILABLE' : 'LOW_SPONSOR_BALANCE' });
+      for (const entry of reconciled.filter(entry => entry.failureCode?.startsWith('BETA_ACCOUNTING') || (entry.actualMicroStx === undefined && entry.failureCode?.startsWith('SIMULATION_')))) alerts.push({ code: entry.failureCode!, quoteId: entry.quoteId, transactionId: entry.txid ?? null });
+      respond(request, response, 200, { entries: reconciled, alerts }, []);
+      return;
+    }
     if (request.method === 'GET' && request.url === '/v1/activity') {
       // Operational history is local-only, including when the relay binds publicly.
       if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? '')) {
@@ -492,7 +584,9 @@ export class OssrRelayApi {
         entries: records.slice(0, 500).map(record => ({
           quoteId: record.quote.quoteId, state: record.state, updatedAt: record.updatedAt,
           origin: record.intent.origin, recipient: record.intent.recipient,
-          amountSats: record.intent.amountSats.toString(), sponsorFeeSats: record.quote.sponsorFee,
+          assetId: record.quote.reimbursementAsset.assetId,
+          amountUnits: record.intent.amountSats.toString(), sponsorFeeUnits: record.quote.sponsorFee,
+          ...(record.quote.reimbursementAsset.assetId === 'sbtc' ? { amountSats: record.intent.amountSats.toString(), sponsorFeeSats: record.quote.sponsorFee } : {}),
           issuedAtBlock: record.quote.issuedAtBlock, expiresAtBlock: record.quote.expiresAtBlock,
           transactionId: record.result ? `0x${record.result.transaction_id}` : null,
           feeMicroStx: record.result?.fee_microstx ?? null,
@@ -505,13 +599,15 @@ export class OssrRelayApi {
       try {
         const status = await this.config.operator.transactionStatus(sponsorshipMatch[1]);
         const transactionId = sponsorshipMatch[1].toLowerCase();
+        if (this.betaBudget) await this.betaBudget.reconcile(transactionId, status.raw, this.config.operator.address, `${this.sbtcContract()}::sbtc-token`);
         if (status.status === 'success' && !this.confirmedTransactions.has(transactionId)) {
           this.confirmedTransactions.add(transactionId);
           this.counters.confirmations += 1;
           const lifecycle = this.broadcasts.get(transactionId);
           if (lifecycle) {
             recordLatency(this.counters.latencyMs.broadcastToConfirmation, Date.now() - lifecycle.at);
-            this.counters.satsReimbursed += lifecycle.reimbursementSats;
+            if (lifecycle.assetId === 'usdcx') this.counters.usdcxReimbursedUnits += lifecycle.reimbursementSats;
+            else this.counters.satsReimbursed += lifecycle.reimbursementSats;
           }
         }
         const stored = await this.quoteStore.findByTransactionId(sponsorshipMatch[1]);
@@ -543,10 +639,23 @@ export class OssrRelayApi {
       return;
     }
     try {
+      const authorizedWallet = this.betaAccess?.authenticate(request.headers.authorization);
+      const input = await readJson(request);
+      if (authorizedWallet) this.betaAccess!.bindOrigin(authorizedWallet, input, request.url === '/v1/quotes' ? 'quote' : 'sponsor');
       if (request.url === '/v1/quotes') {
-        respond(request, response, 201, await this.quote(await readJson(request)), this.corsAllowedOrigins);
+        respond(request, response, 201, await this.quote(input), this.corsAllowedOrigins);
       } else {
-        const result = await this.sponsor(await readJson(request));
+        if (this.payments && !request.headers['payment-signature']) {
+          const required = this.payments.required();
+          response.setHeader('PAYMENT-REQUIRED', encodePayment(required));
+          respond(request, response, 402, required, this.corsAllowedOrigins);
+          return;
+        }
+        const settle = await this.payments?.authorize(request.headers['payment-signature'], input);
+        if (settle?.receipt) response.setHeader('PAYMENT-RESPONSE', encodePayment(settle.receipt));
+        const result = await this.sponsor(input, settle ? async () => {
+          response.setHeader('PAYMENT-RESPONSE', encodePayment(await settle()));
+        } : undefined);
         respond(request, response, request.url === '/v1/sponsorships' ? 201 : 200, {
           ...result,
           transactionId: `0x${result.transaction_id}`,
@@ -555,6 +664,12 @@ export class OssrRelayApi {
       }
     } catch (error) {
       this.counters.rejections += 1;
+      if (error instanceof X402Error) {
+        const required = this.payments!.required(error.code);
+        if (error.status === 402) response.setHeader('PAYMENT-REQUIRED', encodePayment(required));
+        respond(request, response, error.status, { ...required, error: error.code }, this.corsAllowedOrigins);
+        return;
+      }
       const relayError = toRelayError(error);
       this.log('relay.sponsor.rejected', { code: relayError.code, message: relayError.message });
       respond(request, response, relayError.status, { error: relayError.code, message: relayError.message }, this.corsAllowedOrigins);
@@ -583,6 +698,10 @@ export class OssrRelayApi {
 
   private async recordFailure(): Promise<void> {
     if (this.config.healthRegistry && this.config.operatorId) await this.config.healthRegistry.recordFailure(this.config.operatorId);
+  }
+
+  private usdcxEnabled(): boolean {
+    return Boolean(this.config.usdcxAdapterContractAddress && this.config.usdcxSponsorFeeUnits !== undefined);
   }
 
   private adapterContract(): string | undefined {
@@ -763,15 +882,17 @@ function parseSponsorRequest(input: unknown): { transaction: string; user: strin
   return { transaction: input.transaction, user: input.user, quoteId: input.quoteId };
 }
 
-function parseQuoteRequest(input: unknown): QuoteIntent {
-  if (!isRecord(input) || typeof input.origin !== 'string' || typeof input.recipient !== 'string' || typeof input.amountSats !== 'string' || typeof input.maxSponsorFeeSats !== 'string') {
-    throw new RelayError(400, 'INVALID_REQUEST', 'Body must contain origin, recipient, amountSats, and maxSponsorFeeSats strings.');
+function parseQuoteRequest(input: unknown, usdcx = false): QuoteIntent {
+  const amountField = usdcx ? 'amountUnits' : 'amountSats';
+  const feeField = usdcx ? 'maxSponsorFeeUnits' : 'maxSponsorFeeSats';
+  if (!isRecord(input) || typeof input.origin !== 'string' || typeof input.recipient !== 'string' || typeof input[amountField] !== 'string' || typeof input[feeField] !== 'string') {
+    throw new RelayError(400, 'INVALID_REQUEST', `Body must contain origin, recipient, ${amountField}, and ${feeField} strings.`);
   }
   if (!validateStacksAddress(input.origin)) throw new RelayError(400, 'INVALID_ORIGIN', 'origin must be a valid Stacks address.');
   if (!validateStacksAddress(input.recipient)) throw new RelayError(400, 'INVALID_RECIPIENT', 'recipient must be a valid Stacks address.');
   if (input.origin === input.recipient) throw new RelayError(422, 'INVALID_RECIPIENT', 'recipient must differ from origin.');
-  const amountSats = parsePositiveDecimal(input.amountSats, 'amountSats');
-  const maxSponsorFeeSats = parsePositiveDecimal(input.maxSponsorFeeSats, 'maxSponsorFeeSats');
+  const amountSats = parsePositiveDecimal(input[amountField] as string, amountField);
+  const maxSponsorFeeSats = parsePositiveDecimal(input[feeField] as string, feeField);
   if (input.memo !== undefined && (typeof input.memo !== 'string' || !/^0x(?:[0-9a-f]{2}){0,34}$/.test(input.memo))) throw new RelayError(400, 'INVALID_MEMO', 'memo must be 0x-prefixed lowercase hex up to 34 bytes.');
   return { origin: input.origin, recipient: input.recipient, amountSats, maxSponsorFeeSats, memo: input.memo };
 }
@@ -812,14 +933,14 @@ function defaultTransactionPolicy(transaction: ReturnType<typeof deserializeTran
   if (transaction.payload.payloadType === PayloadType.ContractCall) {
     const payload = transaction.payload;
     if (`${addressToString(payload.contractAddress)}.${payload.contractName.content}` === adapterContract && payload.functionName.content === 'sponsored-transfer') return;
-    throw new RelayError(422, 'UNSUPPORTED_TRANSACTION', 'Only the configured sBTC sponsored-transfer adapter may be sponsored.');
+    throw new RelayError(422, 'UNSUPPORTED_TRANSACTION', 'Only the quoted sponsored-transfer adapter may be sponsored.');
   }
-  throw new RelayError(422, 'UNSUPPORTED_TRANSACTION', 'Only the configured sBTC sponsored-transfer adapter may be sponsored.');
+  throw new RelayError(422, 'UNSUPPORTED_TRANSACTION', 'Only the quoted sponsored-transfer adapter may be sponsored.');
 }
 
 function validateTransactionAgainstQuote(transaction: ReturnType<typeof deserializeTransaction>, stored: StoredQuote): void {
   const payload = transaction.payload;
-  if (payload.payloadType !== PayloadType.ContractCall) throw new RelayError(422, 'QUOTE_TRANSACTION_MISMATCH', 'Quoted sponsorship requires the sBTC adapter contract call.');
+  if (payload.payloadType !== PayloadType.ContractCall) throw new RelayError(422, 'QUOTE_TRANSACTION_MISMATCH', 'Quoted sponsorship requires the quoted adapter contract call.');
   const quote = stored.quote;
   if (`${addressToString(payload.contractAddress)}.${payload.contractName.content}` !== quote.adapterContract || payload.functionName.content !== quote.functionName) {
     throw new RelayError(422, 'QUOTE_TRANSACTION_MISMATCH', 'Transaction does not call the quoted adapter.');
@@ -851,7 +972,7 @@ function validatePostConditions(transaction: ReturnType<typeof deserializeTransa
   }
   const conditions = transaction.postConditions.values;
   if (conditions.length !== 1) {
-    throw new RelayError(422, 'INVALID_POST_CONDITIONS', 'Exactly one sBTC fungible-token post-condition is required.');
+    throw new RelayError(422, 'INVALID_POST_CONDITIONS', `Exactly one ${stored.quote.reimbursementAsset.assetId === 'usdcx' ? 'USDCx' : 'sBTC'} fungible-token post-condition is required.`);
   }
   const condition = conditions[0];
   if (condition.conditionType !== PostConditionType.Fungible || condition.conditionCode !== FungibleConditionCode.Equal) {
@@ -861,8 +982,8 @@ function validatePostConditions(transaction: ReturnType<typeof deserializeTransa
     throw new RelayError(422, 'INVALID_POST_CONDITIONS', 'The post-condition principal must be the quote origin.');
   }
   const [assetAddress, assetContractName] = splitContractPrincipal(stored.quote.reimbursementAsset.contract);
-  if (addressToString(condition.asset.address) !== assetAddress || condition.asset.contractName.content !== assetContractName || condition.asset.assetName.content !== 'sbtc-token') {
-    throw new RelayError(422, 'INVALID_POST_CONDITIONS', 'The post-condition must reference the configured sBTC asset.');
+  if (addressToString(condition.asset.address) !== assetAddress || condition.asset.contractName.content !== assetContractName || condition.asset.assetName.content !== (stored.quote.reimbursementAsset.assetId === 'usdcx' ? 'usdcx-token' : 'sbtc-token')) {
+    throw new RelayError(422, 'INVALID_POST_CONDITIONS', `The post-condition must reference the configured ${stored.quote.reimbursementAsset.assetId === 'usdcx' ? 'USDCx' : 'sBTC'} asset.`);
   }
   const exactOutflow = stored.intent.amountSats + BigInt(stored.quote.sponsorFee);
   if (condition.amount !== exactOutflow) {
@@ -885,7 +1006,7 @@ function quoteDomainCV() {
   return tupleCV({ name: stringAsciiCV('ossr-quote'), version: stringAsciiCV('1'), 'chain-id': uintCV(2147483648n) });
 }
 
-function quoteMessageCV(quote: SbtcTransferQuote) {
+function quoteMessageCV(quote: TransferQuote) {
   const [assetAddress, assetName] = splitContractPrincipal(quote.reimbursementAsset.contract);
   const [adapterAddress, adapterName] = splitContractPrincipal(quote.adapterContract);
   return tupleCV({
@@ -959,7 +1080,8 @@ function corsHeaders(request: IncomingMessage, allowedOrigins: string[]): Record
   return {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type,Accept,X-Request-Id,Idempotency-Key',
+    'Access-Control-Allow-Headers': 'Content-Type,Accept,Authorization,X-Request-Id,Idempotency-Key,PAYMENT-SIGNATURE',
+    'Access-Control-Expose-Headers': 'PAYMENT-REQUIRED,PAYMENT-RESPONSE',
     'Access-Control-Max-Age': '600',
     Vary: 'Origin',
   };
@@ -996,6 +1118,8 @@ class RelayError extends Error {
 
 function toRelayError(error: unknown): RelayError {
   if (error instanceof RelayError) return error;
+  if (error instanceof BetaBudgetError) return new RelayError(error.code.startsWith('BETA_ACCOUNTING') ? 503 : 422, error.code, error.message);
+  if (error instanceof BetaAccessError) return new RelayError(error.status, error.code, error.message);
   const message = error instanceof Error ? error.message : 'Unexpected relay failure.';
   if (/insufficient STX/i.test(message)) return new RelayError(503, 'INSUFFICIENT_STX', message);
   if (/broadcast rejected/i.test(message)) return new RelayError(502, 'BROADCAST_FAILED', message);

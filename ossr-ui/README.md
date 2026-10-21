@@ -6,7 +6,7 @@ The prioritized work required for a grant-reviewable interface is tracked in
 [GRANT-READINESS.md](GRANT-READINESS.md).
 
 Configure the trusted relay key and identity before signing, using
-[P0-VALIDATION.md](P0-VALIDATION.md#configure-trust-before-signing). These public
+[deployment runbook](DEPLOYMENT-RUNBOOK.md#public-deployment-configuration). These public
 values must come from a trusted operator channel. Restart development or rebuild
 the deployment after changing them. Run `npm run test:ui-quotes` from the
 repository root to verify quote and origin-signing safeguards.
@@ -17,8 +17,10 @@ The MVP should use an existing browser wallet through Stacks Connect. The UI
 requests:
 
 - `getAddresses` to discover the user's STX address.
-- `stx_callContract` with `sponsored: true` to ask the wallet for an
-  origin-signed, not-yet-broadcast contract-call transaction.
+- `stx_signTransaction` with a prebuilt sponsored transaction and
+  `broadcast: false` to request raw origin-signed bytes. Returned authorization,
+  intent, and post-conditions are verified locally before relay submission.
+  Complete Leather/Xverse extension acceptance remains pending.
 
 The relay then receives those raw signed bytes at `POST /v1/sponsorships`,
 adds the sponsor authorization, pays the STX fee, and broadcasts.
@@ -90,3 +92,11 @@ Set `SBTC_FAUCET_PRIVATE_KEY` (or `SPONSOR_PRIVATE_KEY`) in `ossr-ui/.env.local`
 Claims are limited to once per address every 24 hours. Set `SBTC_FAUCET_DATA_DIR` to a persistent directory (default `.sbtc-faucet`). On Vercel, connect Upstash Redis and configure `KV_REST_API_URL` and `KV_REST_API_TOKEN` (or the equivalent `UPSTASH_REDIS_REST_*` variables). Claims and the sponsor lock then persist across deployments and function instances. The filesystem directory is used only outside Vercel; serverless requests refuse to run without Redis. Requests serialize using a shared sponsor lock (Redis uses a 120-second lease; the route has a 60-second execution limit), and claim receipts are saved before broadcasting so retries cannot pay twice. If the server crashes while holding `sponsor.lock`, inspect the saved receipts and chain status before removing the lock. Run one faucet instance per sponsor and coordinate other services using the same key to avoid nonce conflicts.
 
 Run the mocked endpoint checks with `../node_modules/.bin/tsx lib/testnet-sbtc.test.ts` from `ossr-ui`.
+
+Run `npm run test:unit` and, after `npm run build` and Playwright browser installation,
+`npm run test:browser` in this directory. See [current evidence and gaps](READINESS-VALIDATION.md).
+
+Manual acceptance tasks are [tagged and listed here](MANUAL-TASKS.md).
+For invited beta controls and operator reconciliation see [BETA-ACCESS.md](BETA-ACCESS.md).
+`npm run test:browser` builds an isolated fixture artifact automatically.
+`npm run test:live` requires explicit opt-in and a real wallet-derived receipt.

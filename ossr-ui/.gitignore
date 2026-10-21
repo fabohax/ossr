@@ -2,3 +2,10 @@
 .source
 
 .sbtc-faucet/
+
+/test-results/
+/playwright-report/
+/.next-readiness/
+
+/live-test-results/
+*.storage-state.json

@@ -26,12 +26,16 @@
     "test:reimbursement": "tsx packages/sbtc/src/reimbursement.test.ts",
     "test:transaction-state": "tsx apps/operator/src/transaction-state.test.ts",
     "test:registry": "tsx apps/operator/src/registry.test.ts",
+    "test:x402": "tsx apps/operator/src/x402.test.ts",
     "test:relay-policy": "tsx apps/operator/src/api.test.ts",
     "test:quote-store": "tsx apps/operator/src/quote-store.test.ts",
     "test:ui-quotes": "tsx ossr-ui/lib/quote-verification.test.ts",
     "test:simulation-response": "tsx apps/operator/src/simulation-response.test.ts",
     "test:nonce-store": "tsx apps/operator/src/nonce-store.test.ts",
-    "nostr:publish": "node scripts/nostr-publish.mjs"
+    "nostr:publish": "node scripts/nostr-publish.mjs",
+    "deploy:usdcx": "tsx packages/stacks/scripts/deploy-usdcx-adapter.ts",
+    "test:beta-access": "tsx --test apps/operator/src/beta-access.test.ts",
+    "test:beta-budget": "tsx --test apps/operator/src/beta-budget.test.ts"
   },
   "dependencies": {
     "@stacks/transactions": "^7.6.0",
