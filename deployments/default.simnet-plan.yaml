@@ -49,6 +49,11 @@ plan:
       path: contracts/mocks/mock-sbtc-token.clar
       clarity-version: 6
     - transaction-type: emulated-contract-publish
+      contract-name: sip-010-trait
+      emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+      path: contracts/sip-010-trait.clar
+      clarity-version: 6
+    - transaction-type: emulated-contract-publish
       contract-name: mock-usdcx-token
       emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
       path: contracts/mocks/mock-usdcx-token.clar

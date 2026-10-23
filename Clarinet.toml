@@ -17,6 +17,10 @@ epoch = "latest"
 path = "contracts/testing/sbtc-sponsored-transfer-v1.clar"
 epoch = "latest"
 
+[contracts.sip-010-trait]
+path = "contracts/sip-010-trait.clar"
+epoch = "latest"
+
 [contracts.mock-usdcx-token]
 path = "contracts/mocks/mock-usdcx-token.clar"
 epoch = "latest"

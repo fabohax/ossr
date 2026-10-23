@@ -13,7 +13,7 @@ plan:
       remap-principals:
         SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
       cost: 112740
-      path: .cache/requirements/SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-registry.clar
+      path: ./.cache/requirements/SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-registry.clar
       clarity-version: 3
     - transaction-type: requirement-publish
       contract-id: SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token
@@ -21,7 +21,7 @@ plan:
       remap-principals:
         SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
       cost: 47600
-      path: .cache/requirements/SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token.clar
+      path: ./.cache/requirements/SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token.clar
       clarity-version: 3
     epoch: '3.0'
   - id: 1
@@ -34,9 +34,23 @@ plan:
       anchor-block-only: true
       clarity-version: 6
     - transaction-type: contract-publish
+      contract-name: sip-010-trait
+      expected-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+      cost: 4370
+      path: contracts/sip-010-trait.clar
+      anchor-block-only: true
+      clarity-version: 6
+    - transaction-type: contract-publish
+      contract-name: mock-usdcx-token
+      expected-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+      cost: 82450
+      path: contracts/mocks/mock-usdcx-token.clar
+      anchor-block-only: true
+      clarity-version: 6
+    - transaction-type: contract-publish
       contract-name: operators-registry
       expected-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
-      cost: 11530
+      cost: 13000
       path: contracts/registry/operators-registry.clar
       anchor-block-only: true
       clarity-version: 6
@@ -45,6 +59,13 @@ plan:
       expected-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
       cost: 29090
       path: contracts/testing/sbtc-sponsored-transfer-v1.clar
+      anchor-block-only: true
+      clarity-version: 6
+    - transaction-type: contract-publish
+      contract-name: usdcx-sponsored-transfer-v1
+      expected-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+      cost: 29190
+      path: contracts/testing/usdcx-sponsored-transfer-v1.clar
       anchor-block-only: true
       clarity-version: 6
     epoch: '4.0'
