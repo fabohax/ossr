@@ -1,0 +1,6 @@
+{
+  "framework": "nextjs",
+  "installCommand": "cd ossr-ui && npm install",
+  "buildCommand": "cd ossr-ui && npm run build",
+  "outputDirectory": "ossr-ui/.next"
+}
