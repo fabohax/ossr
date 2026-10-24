@@ -104,6 +104,8 @@ async function main(): Promise<void> {
       sbtcContractAddress: process.env.SBTC_CONTRACT_ADDRESS?.trim(),
       sbtcContractName: process.env.SBTC_CONTRACT_NAME?.trim(),
       usdcxAdapterContractAddress: process.env.USDCX_ADAPTER_CONTRACT_ADDRESS?.trim(),
+      usdcxContractAddress: process.env.USDCX_CONTRACT_ADDRESS?.trim(),
+      usdcxContractName: process.env.USDCX_CONTRACT_NAME?.trim(),
       usdcxSponsorFeeUnits: process.env.USDCX_SPONSOR_FEE_UNITS ? BigInt(process.env.USDCX_SPONSOR_FEE_UNITS) : undefined,
       quoteLifetimeBlocks: BigInt(process.env.QUOTE_TTL_BLOCKS ?? '10'),
       breakEvenFeeSats: BigInt(process.env.SBTC_BREAK_EVEN_FEE_SATS ?? '1'),

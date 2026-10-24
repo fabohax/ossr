@@ -4,8 +4,8 @@ import type { Quote, QuoteResponse } from './ossr';
 import { isValidRelayUrl } from './relay-url';
 import { compressPublicKey } from '@stacks/transactions';
 
-export type TransferIntent = { relayUrl: string; origin: string; recipient: string; amountSats: string; maxSponsorFeeSats: string; memo?: string };
-export type QuoteTrust = { publicKey: string; relayId: string; keyId: string; policyVersion: string; adapterContract: string; sbtcContract: string; sponsorPrincipal: string };
+export type TransferIntent = { relayUrl: string; origin: string; recipient: string; amountSats: string; maxSponsorFeeSats: string; memo?: string; assetId?: 'sbtc' | 'usdcx' };
+export type QuoteTrust = { publicKey: string; relayId: string; keyId: string; policyVersion: string; adapterContract: string; sbtcContract: string; usdcxContract?: string; sponsorPrincipal: string };
 export function configuredQuoteTrust(): QuoteTrust {
   const trust = {
     publicKey: process.env.NEXT_PUBLIC_OSSR_QUOTE_PUBLIC_KEY ?? '',
@@ -14,6 +14,7 @@ export function configuredQuoteTrust(): QuoteTrust {
     policyVersion: process.env.NEXT_PUBLIC_OSSR_POLICY_VERSION ?? '',
     adapterContract: process.env.NEXT_PUBLIC_OSSR_ADAPTER_CONTRACT ?? '',
     sbtcContract: process.env.NEXT_PUBLIC_OSSR_SBTC_CONTRACT ?? '',
+    usdcxContract: process.env.NEXT_PUBLIC_OSSR_USDCX_CONTRACT ?? '',
     sponsorPrincipal: process.env.NEXT_PUBLIC_OSSR_SPONSOR_PRINCIPAL ?? '',
   };
   if (Object.values(trust).some(value => !value)) throw new Error('Quote trust is not configured. Configure the trusted relay identity and public key before signing.');
@@ -40,10 +41,17 @@ export function assertFreshQuote(quote: Quote, height: number) {
 export function verifyQuote(response: QuoteResponse, intent: TransferIntent, trust: QuoteTrust, height: number, balance: string): void {
   if (Object.keys(validateIntent(intent)).length) throw new Error('Correct the transfer fields before requesting approval.');
   const q = response.quote;
+  const assetId = q.reimbursementAsset.assetId;
   const publicKey = normalizeQuotePublicKey(trust.publicKey);
-  const expected = { protocolVersion: '1', network: 'testnet', action: 'sbtc-transfer', functionName: 'sponsored-transfer', origin: intent.origin, relayId: trust.relayId, keyId: trust.keyId, policyVersion: trust.policyVersion, adapterContract: trust.adapterContract, sponsorPrincipal: trust.sponsorPrincipal };
+  const expectedContract = assetId === 'usdcx' ? trust.usdcxContract : trust.sbtcContract;
+  const expected = { protocolVersion: '1', network: 'testnet', action: assetId === 'usdcx' ? 'usdcx-transfer' : 'sbtc-transfer', functionName: 'sponsored-transfer', origin: intent.origin, relayId: trust.relayId, keyId: trust.keyId, policyVersion: trust.policyVersion, adapterContract: trust.adapterContract, sponsorPrincipal: trust.sponsorPrincipal };
   for (const [key, value] of Object.entries(expected)) if (q[key as keyof Quote] !== value) throw new Error(`Untrusted quote ${key}.`);
-  if (normalizeQuotePublicKey(response.quotePublicKey) !== publicKey || q.reimbursementAsset.contract !== trust.sbtcContract || q.reimbursementAsset.assetId !== 'sbtc' || q.reimbursementAsset.unit !== 'sat' || q.reimbursementAsset.decimals !== '8') throw new Error('Untrusted quote key or asset.');
+  if (normalizeQuotePublicKey(response.quotePublicKey) !== publicKey || q.reimbursementAsset.contract !== expectedContract) throw new Error('Untrusted quote key or asset.');
+  if (assetId === 'usdcx') {
+    if (q.reimbursementAsset.unit !== 'micro-usdcx' || q.reimbursementAsset.decimals !== '6') throw new Error('Untrusted quote key or asset.');
+  } else {
+    if (q.reimbursementAsset.assetId !== 'sbtc' || q.reimbursementAsset.unit !== 'sat' || q.reimbursementAsset.decimals !== '8') throw new Error('Untrusted quote key or asset.');
+  }
   for (const value of [q.sponsorFee, q.maxNetworkFeeMicroStx, q.issuedAtBlock, q.expiresAtBlock]) {
     if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value) || value.length > 39 || BigInt(value) >= 2n ** 128n) throw new Error('Malformed quote integer.');
   }

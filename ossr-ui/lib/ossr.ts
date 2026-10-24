@@ -31,6 +31,13 @@ export type RelayInfo = {
   supportedActions: string[];
   adapterContract?: string;
   sbtcContract?: string;
+  usdcx?: {
+    adapterContract?: string;
+    reimbursementAsset?: { assetId: 'usdcx'; contract: string; unit: 'micro-usdcx'; decimals: '6' };
+    sponsorFeeUnits?: string;
+    maximumTransferUnits?: string;
+    maximumSponsorFeeUnits?: string;
+  };
   limits: {
     maxNetworkFeeMicroStx: string;
     quoteLifetimeBlocks: string;
@@ -55,8 +62,8 @@ export type Quote = {
   network: 'testnet';
   sponsorPrincipal: string;
   origin: string;
-  action: 'sbtc-transfer';
-  reimbursementAsset: { assetId: 'sbtc'; contract: string; unit: 'sat'; decimals: '8' };
+  action: 'sbtc-transfer' | 'usdcx-transfer';
+  reimbursementAsset: { assetId: 'sbtc'; contract: string; unit: 'sat'; decimals: '8' } | { assetId: 'usdcx'; contract: string; unit: 'micro-usdcx'; decimals: '6' };
   adapterContract: string;
   functionName: 'sponsored-transfer';
   argumentsHash: string;
@@ -141,15 +148,16 @@ export async function requestQuote(input: {
   amountSats: string;
   maxSponsorFeeSats: string;
   memo?: string;
+  assetId?: 'sbtc' | 'usdcx';
 }): Promise<QuoteResponse> {
+  const isUsdcx = input.assetId === 'usdcx';
   return fetchJson(`${normalizeRelayUrl(input.relayUrl)}/v1/quotes`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...relayAccessHeaders(input.relayUrl) },
     body: JSON.stringify({
       origin: input.origin,
       recipient: input.recipient,
-      amountSats: input.amountSats,
-      maxSponsorFeeSats: input.maxSponsorFeeSats,
+      ...(isUsdcx ? { assetId: 'usdcx', amountUnits: input.amountSats, maxSponsorFeeUnits: input.maxSponsorFeeSats } : { amountSats: input.amountSats, maxSponsorFeeSats: input.maxSponsorFeeSats }),
       ...(input.memo ? { memo: input.memo } : {}),
     }),
   });
@@ -192,6 +200,19 @@ export async function fetchSbtcBalance(address: string, sbtcContract = 'SN3VMHXE
   };
 }
 
+export async function fetchUsdcxBalance(address: string, usdcxContract = 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.mock-usdcx-token'): Promise<SbtcBalance> {
+  const apiUrl = stacksApiUrl();
+  const response = await fetchJson<{ fungible_tokens?: Record<string, { balance?: string }> }>(
+    `${apiUrl.replace(/\/$/, '')}/extended/v1/address/${address}/balances`,
+  );
+  const token = `${usdcxContract}::usdcx-token`;
+  return {
+    address,
+    token,
+    balanceSats: response.fungible_tokens?.[token]?.balance ?? '0',
+  };
+}
+
 export async function fetchStacksTipHeight(): Promise<number> {
   const apiUrl = stacksApiUrl();
   const info = await fetchJson<{ stacks_tip_height?: number }>(`${apiUrl.replace(/\/$/, '')}/v2/info`);
@@ -210,6 +231,7 @@ export function prepareWalletContractCall(input: {
   const [contractAddress, contractName] = splitContractPrincipal(input.quote.adapterContract);
   const totalSats = BigInt(input.amountSats) + BigInt(input.quote.sponsorFee);
   const memo = input.memo ? someCV(bufferCV(hexToBytes(input.memo))) : noneCV();
+  const tokenName = input.quote.reimbursementAsset.assetId === 'usdcx' ? 'usdcx-token' : 'sbtc-token';
   return {
     contract: asContractId(input.quote.adapterContract),
     contractAddress,
@@ -226,7 +248,7 @@ export function prepareWalletContractCall(input: {
     postConditions: [
       Pc.principal(input.quote.origin)
         .willSendEq(totalSats)
-        .ft(asContractId(input.quote.reimbursementAsset.contract), 'sbtc-token'),
+        .ft(asContractId(input.quote.reimbursementAsset.contract), tokenName),
     ].map(postCondition => postConditionToHex(postCondition)),
     postConditionMode: 'deny',
     sponsored: true,

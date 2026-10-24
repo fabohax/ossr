@@ -3,7 +3,7 @@
 import { setRelayAccessToken, clearRelayAccess } from '@/lib/relay-access';
 import { measureOperation } from '@/lib/diagnostics';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRight, CheckCircle2, CircleAlert, ExternalLink, Loader2, LogOut, Radio, RefreshCw, Send, ShieldCheck, Wallet } from 'lucide-react';
+import { ArrowRight, CheckCircle2, ChevronDown, CircleAlert, ExternalLink, Info, Loader2, LogOut, Radio, RefreshCw, Send, ShieldCheck, Wallet } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Badge } from '@/components/ui/badge';
@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { connectTestnetWallet } from '@/lib/connect-wallet';
+import { assetConfig, assetOptions, type AssetId } from '@/lib/asset-selection';
 import { cachedSbtcBalance, defaultSbtcContract, fetchDisplaySbtcBalance } from '@/lib/sbtc-balance';
 import { approvedWalletProviderIds, connectedWalletPublicKeyKey, readCachedStacksAccount, requireTestnetStacksAccount } from '@/lib/stacks-wallet';
 import { configuredQuoteTrust, validateIntent, verifyQuote, type TransferIntent } from '@/lib/quote-verification';
@@ -28,6 +29,7 @@ import {
   fetchRelayInfo,
   fetchSbtcBalance,
   fetchSponsorshipStatus,
+  fetchUsdcxBalance,
   isFailedChainStatus,
   isTerminalChainStatus,
   likelyFailureCause,
@@ -183,7 +185,12 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
   const [status, setStatus] = useState<SponsorshipStatus>();
   const [sbtcBalance, setSbtcBalance] = useState<SbtcBalance>();
   const [balanceUnavailable, setBalanceUnavailable] = useState(false);
-  const balanceContract = relayInfo?.sbtcContract || process.env.NEXT_PUBLIC_OSSR_SBTC_CONTRACT || defaultSbtcContract;
+  const [showTransferInfo, setShowTransferInfo] = useState(false);
+  const [showAssetMenu, setShowAssetMenu] = useState(false);
+  const [assetId, setAssetId] = useState<AssetId>('sbtc');
+  const asset = assetConfig(assetId);
+  const usdcxContract = relayInfo?.usdcx?.reimbursementAsset?.contract || process.env.NEXT_PUBLIC_OSSR_USDCX_CONTRACT || 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.mock-usdcx-token';
+  const balanceContract = assetId === 'usdcx' ? usdcxContract : relayInfo?.sbtcContract || process.env.NEXT_PUBLIC_OSSR_SBTC_CONTRACT || defaultSbtcContract;
   const [busy, setBusy] = useState<string>();
   const [faucetTxid, setFaucetTxid] = useState('');
   const [error, setError] = useState<DisplayError>();
@@ -200,6 +207,17 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
     const amount = /^[1-9]\d*$/.test(amountSats) ? BigInt(amountSats) : 0n;
     return estimatedSponsorFee(amount, relayInfo?.limits).toString();
   }, [amountSats, relayInfo]);
+
+  function setAmountByPercent(percent: number) {
+    if (!sbtcBalance || !/^\d+$/.test(sbtcBalance.balanceSats)) return;
+    const balance = BigInt(sbtcBalance.balanceSats);
+    const fraction = BigInt(Math.max(0, Math.min(100, percent)) * 1000) / 1000n;
+    const target = balance * BigInt(percent) / 100n;
+    const fee = estimatedSponsorFee(target, relayInfo?.limits);
+    const safe = balance > fee ? balance - fee : 0n;
+    const candidate = percent === 100 ? safe : (safe * BigInt(percent) / 100n);
+    setAmountSats(candidate.toString());
+  }
 
   function setMaximumAmount() {
     if (!sbtcBalance || !/^\d+$/.test(sbtcBalance.balanceSats)) return;
@@ -240,7 +258,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
     } catch (error) { setRelayUnavailable(true); throw error; }
   }
 
-  const currentIntent: TransferIntent = { relayUrl, origin, recipient, amountSats, maxSponsorFeeSats, ...(memo ? { memo: normalizeMemo(memo) } : {}) };
+  const currentIntent: TransferIntent = { relayUrl, origin, recipient, amountSats, maxSponsorFeeSats, ...(memo ? { memo: normalizeMemo(memo) } : {}), assetId };
   const intentKey = JSON.stringify(currentIntent);
   intentRef.current = intentKey;
   const fieldErrors = validateIntent(currentIntent);
@@ -357,6 +375,12 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
   }, [defaultSponsorFeeSats]);
 
   useEffect(() => {
+    if (assetId === 'usdcx' && relayInfo && !relayInfo.supportedActions.includes('usdcx-transfer')) {
+      setAssetId('sbtc');
+    }
+  }, [assetId, relayInfo]);
+
+  useEffect(() => {
     setBalanceUnavailable(false);
     if (!origin) {
       setSbtcBalance(undefined);
@@ -368,7 +392,9 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
     let cancelled = false;
     const refresh = async () => {
       try {
-        const balance = await fetchDisplaySbtcBalance(origin, balanceContract);
+        const balance = assetId === 'usdcx'
+          ? await fetchUsdcxBalance(origin, usdcxContract)
+          : await fetchDisplaySbtcBalance(origin, balanceContract);
         if (!cancelled) {
           setSbtcBalance(balance);
           setBalanceUnavailable(false);
@@ -383,7 +409,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [origin, balanceContract]);
+  }, [origin, assetId, balanceContract, usdcxContract]);
 
   useEffect(() => {
     if (!txid) return;
@@ -491,8 +517,12 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
       const snapshot = { ...currentIntent };
       const key = JSON.stringify(snapshot);
       const trust = configuredQuoteTrust();
-      const [quote, height, balance] = await Promise.all([requestQuote(snapshot), fetchStacksTipHeight(), fetchSbtcBalance(snapshot.origin, trust.sbtcContract)]);
-      verifyQuote(quote, snapshot, trust, height, balance.balanceSats);
+      const [quote, height, balance] = await Promise.all([
+        requestQuote({ ...snapshot, assetId }),
+        fetchStacksTipHeight(),
+        assetId === 'usdcx' ? fetchUsdcxBalance(snapshot.origin, usdcxContract) : fetchSbtcBalance(snapshot.origin, trust.sbtcContract),
+      ]);
+      verifyQuote(quote, { ...snapshot, assetId }, trust, height, balance.balanceSats);
       if (intentRef.current !== key) throw new Error('Transfer changed while requesting the quote. Request a fresh quote.');
       setQuoteTipHeight(height); setQuoteHeightUnavailable(false);
       setQuoteResponse(quote); setSbtcBalance(balance);
@@ -537,8 +567,11 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
     };
     assertWalletSession();
     const trust = configuredQuoteTrust();
-    const [height, balance] = await Promise.all([fetchStacksTipHeight(), fetchSbtcBalance(snapshot.origin, trust.sbtcContract)]);
-    verifyQuote(quoteToSubmit, snapshot, trust, height, balance.balanceSats);
+    const [height, balance] = await Promise.all([
+      fetchStacksTipHeight(),
+      assetId === 'usdcx' ? fetchUsdcxBalance(snapshot.origin, usdcxContract) : fetchSbtcBalance(snapshot.origin, trust.sbtcContract),
+    ]);
+    verifyQuote(quoteToSubmit, { ...snapshot, assetId }, trust, height, balance.balanceSats);
 
     const prepared = prepareWalletContractCall({
       quote: quoteToSubmit.quote,
@@ -550,9 +583,9 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
       // Nonce lookup can take long enough for the account, intent, or quote to change.
       const [latestHeight, latestBalance] = await Promise.all([
         fetchStacksTipHeight(),
-        fetchSbtcBalance(snapshot.origin, trust.sbtcContract),
+        assetId === 'usdcx' ? fetchUsdcxBalance(snapshot.origin, usdcxContract) : fetchSbtcBalance(snapshot.origin, trust.sbtcContract),
       ]);
-      verifyQuote(quoteToSubmit, snapshot, trust, latestHeight, latestBalance.balanceSats);
+      verifyQuote(quoteToSubmit, { ...snapshot, assetId }, trust, latestHeight, latestBalance.balanceSats);
       assertWalletSession();
       if (intentRef.current !== JSON.stringify(snapshot)) throw new Error('Transfer changed. Request a fresh quote.');
     }));
@@ -561,8 +594,11 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
     validateSignedWalletTransaction(transaction, prepared, snapshot.origin);
     assertWalletSession();
     if (intentRef.current !== JSON.stringify(snapshot)) throw new Error('Transfer changed during signing. Request a fresh quote.');
-    const [submissionHeight, submissionBalance] = await Promise.all([fetchStacksTipHeight(), fetchSbtcBalance(snapshot.origin, trust.sbtcContract)]);
-    verifyQuote(quoteToSubmit, snapshot, trust, submissionHeight, submissionBalance.balanceSats);
+    const [submissionHeight, submissionBalance] = await Promise.all([
+      fetchStacksTipHeight(),
+      assetId === 'usdcx' ? fetchUsdcxBalance(snapshot.origin, usdcxContract) : fetchSbtcBalance(snapshot.origin, trust.sbtcContract),
+    ]);
+    verifyQuote(quoteToSubmit, { ...snapshot, assetId }, trust, submissionHeight, submissionBalance.balanceSats);
     if (intentRef.current !== JSON.stringify(snapshot)) throw new Error('Transfer changed before submission. Request a fresh quote.');
     let response: SponsorshipResponse;
     try {
@@ -695,17 +731,24 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
           </div>
         </header> : null}
 
-        {!embedded ? <Alert className="mb-6 border-primary/20 bg-primary/5">
-          <ShieldCheck />
-          <AlertTitle>Prototype transaction on Stacks testnet</AlertTitle>
-          <AlertDescription>The wallet authorizes an exact sBTC outflow. The sponsor pays STX and receives the quoted fee atomically.</AlertDescription>
-        </Alert> : null}
-
         <div className={`${embedded ? 'flex w-full' : 'mx-auto flex w-full max-w-lg'}${embedded && sponsorship ? ' hidden' : ''}`}>
+          {!embedded ? (
+            <div className="mb-4 flex justify-end">
+              <Button type="button" variant="ghost" size="icon" aria-label="Transfer overview" onClick={() => setShowTransferInfo(current => !current)} className="h-9 w-9 rounded-full border border-border bg-background text-muted-foreground hover:text-foreground">
+                <Info className="size-4" />
+              </Button>
+            </div>
+          ) : null}
+          {showTransferInfo ? (
+            <Alert className="mb-6 border-primary/20 bg-primary/5">
+              <ShieldCheck />
+              <AlertTitle>Prototype transaction on Stacks testnet</AlertTitle>
+              <AlertDescription>The wallet authorizes an exact asset outflow. The sponsor pays STX and receives the quoted fee atomically.</AlertDescription>
+            </Alert>
+          ) : null}
           <Card size="sm" className={embedded ? 'w-full border-white/10 bg-card/45 shadow-none backdrop-blur-xl' : 'w-full'}>
             <CardContent>
               <form className={embedded ? 'grid gap-3' : 'grid gap-4'} onSubmit={event => { event.preventDefault(); void createQuote(); }}>
-                <p role="note" className="text-xs text-muted-foreground">Testnet prototype only. Connect Leather or Xverse in testnet mode, obtain testnet sBTC, and choose a different recipient. Review the wallet's exact outflow before approval. The sponsor pays STX; your wallet pays the sBTC sponsor fee. If submission is interrupted, check the saved receipt and explorer before retrying.</p>
                 {relayInfo && !relayInfo.sponsorshipsEnabled ? <p role="status" className="text-sm text-muted-foreground">The operator paused new sponsorships. Existing receipts remain available.</p> : null}
                 {relayUnavailable ? <p role="status" className="text-sm text-destructive">Relay unavailable. Approval is disabled. Refresh the relay in Advanced or wait for automatic recovery.</p> : null}
                 {balanceUnavailable ? <p role="status" className="text-sm text-destructive">Balance lookup failed. Approval is disabled until a fresh balance is available; checking again automatically.</p> : null}
@@ -726,29 +769,62 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                       <div className="grid gap-2 sm:col-span-2">
                         <div className="flex items-center justify-between">
                           <Label htmlFor="amount">Amount</Label>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="xs"
-                            className="h-auto px-1.5 py-0.5 text-[10px] font-semibold tracking-wider text-primary hover:bg-primary/10 hover:text-primary"
-                            onClick={setMaximumAmount}
-                            disabled={!sbtcBalance || !/^\d+$/.test(sbtcBalance.balanceSats)}
-                          >
-                            MAX
-                          </Button>
                         </div>
                         <div className="relative">
-                          <Input id="amount" aria-invalid={Boolean(amountSats && fieldErrors.amountSats)} aria-describedby={amountSats && fieldErrors.amountSats ? 'error-amountSats' : undefined} value={amountSats} onChange={event => setAmountSats(event.target.value)} inputMode="numeric" autoComplete="off" placeholder="0" className={`h-16 bg-transparent pr-14 text-3xl dark:bg-transparent md:text-3xl ${embedded ? 'focus-visible:border-input focus-visible:ring-0' : ''}`} />
-                          <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">sats</span>
+                          <div className="flex h-16 items-center overflow-hidden rounded-xl border bg-background">
+                            <Input id="amount" aria-invalid={Boolean(amountSats && fieldErrors.amountSats)} aria-describedby={amountSats && fieldErrors.amountSats ? 'error-amountSats' : undefined} value={amountSats} onChange={event => setAmountSats(event.target.value)} inputMode="numeric" autoComplete="off" placeholder="0" className={`h-full flex-1 border-0 bg-transparent text-3xl dark:bg-transparent md:text-3xl ${embedded ? 'focus-visible:border-input focus-visible:ring-0' : ''}`} />
+                            <button type="button" onClick={() => setShowAssetMenu(value => !value)} className="flex items-center gap-2 border-l bg-muted/30 px-3 text-sm font-medium text-foreground hover:bg-muted/50">
+                              <span className="flex size-6 items-center justify-center overflow-hidden rounded-full">
+                                {asset.logoImage ? <img src={asset.logoImage} alt={asset.label} className="size-6 rounded-full object-cover" /> : <span className={`flex size-6 items-center justify-center rounded-full text-[10px] font-black ${asset.logoClass}`}>{asset.logo}</span>}
+                              </span>
+                              <span>{asset.label}</span>
+                              <ChevronDown className="size-4 text-muted-foreground" />
+                            </button>
+                          </div>
+                          {showAssetMenu ? (
+                            <div className="absolute right-0 z-20 mt-2 w-52 overflow-hidden rounded-lg border bg-popover shadow-lg">
+                              {assetOptions.map(option => (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  onClick={() => {
+                                    setAssetId(option.value);
+                                    setShowAssetMenu(false);
+                                  }}
+                                  className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition hover:bg-muted ${assetId === option.value ? 'bg-muted' : ''}`}
+                                >
+                                  <span className="flex size-8 items-center justify-center overflow-hidden rounded-full">
+                                    {option.logoImage ? <img src={option.logoImage} alt={option.label} className="size-8 rounded-full object-cover" /> : <span className={`flex size-8 items-center justify-center rounded-full text-xs font-black ${option.logoClass}`}>{option.logo}</span>}
+                                  </span>
+                                  <span className="font-medium">{option.label}</span>
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 grid grid-cols-4 gap-2">
+                          {[25, 50, 75, 100].map(percent => (
+                            <Button
+                              key={percent}
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 px-2 text-xs"
+                              onClick={() => setAmountByPercent(percent)}
+                              disabled={!sbtcBalance || !/^\d+$/.test(sbtcBalance.balanceSats)}
+                            >
+                              {percent}%
+                            </Button>
+                          ))}
                         </div>
                         <div className="grid grid-cols-2 gap-4 px-1 text-sm">
                           <div className="flex items-center justify-between">
                             <span className="text-muted-foreground" title={`Pricing refreshes every ${quoteRefreshSeconds} seconds`}>Fee</span>
-                            <span className="font-medium">{defaultSponsorFeeSats} sats</span>
+                            <span className="font-medium">{defaultSponsorFeeSats} {asset.unitLabel}</span>
                           </div>
                           <div className="flex items-center justify-between border-l border-border pl-4">
                             <span className="text-muted-foreground">Balance</span>
-                            <span className="font-medium">{balanceUnavailable ? sbtcBalance ? `${sbtcBalance.balanceSats} sats (stale — refresh unavailable)` : 'Unavailable' : sbtcBalance ? `${sbtcBalance.balanceSats} sats` : origin ? 'Loading' : '—'}</span>
+                            <span className="font-medium">{balanceUnavailable ? sbtcBalance ? `${sbtcBalance.balanceSats} ${asset.unitLabel} (stale — refresh unavailable)` : 'Unavailable' : sbtcBalance ? `${sbtcBalance.balanceSats} ${asset.unitLabel}` : origin ? 'Loading' : '—'}</span>
                           </div>
                         </div>
                       </div>
@@ -770,7 +846,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                             autoCapitalize="characters"
                             autoComplete="off"
                             showClear={Boolean(recipient)}
-                            className={`h-16 bg-transparent dark:bg-transparent [&_input]:font-mono [&_input]:!text-[clamp(0.6875rem,3.7cqw,1rem)] [&_input]:tracking-[-0.02em] ${embedded ? 'has-[[data-slot=input-group-control]:focus-visible]:border-input has-[[data-slot=input-group-control]:focus-visible]:ring-0' : ''}`}
+                            className="h-16 bg-transparent dark:bg-transparent has-[[data-slot=input-group-control]:focus-visible]:border-input has-[[data-slot=input-group-control]:focus-visible]:ring-0 [&_input]:font-mono [&_input]:!text-[clamp(0.6875rem,3.7cqw,1rem)] [&_input]:tracking-[-0.02em]"
                           />
                           <ComboboxContent portalContainer={recipientComboboxPortalRef}>
                             <ComboboxEmpty>No saved addresses</ComboboxEmpty>
@@ -799,7 +875,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                     </div>
 
                     {insufficientBalance ? (
-                      <Alert variant="destructive"><CircleAlert /><AlertTitle>Insufficient sBTC balance</AlertTitle><AlertDescription>This transfer requires {estimatedTotalSats?.toString()} sats including the {defaultSponsorFeeSats} sat sponsor fee, but the wallet has {sbtcBalance?.balanceSats ?? '0'} sats.</AlertDescription></Alert>
+                      <Alert variant="destructive"><CircleAlert /><AlertTitle>Insufficient {asset.label} balance</AlertTitle><AlertDescription>This transfer requires {estimatedTotalSats?.toString()} {asset.unitLabel} including the {defaultSponsorFeeSats} {asset.unitLabel} sponsor fee, but the wallet has {sbtcBalance?.balanceSats ?? '0'} {asset.unitLabel}.</AlertDescription></Alert>
                     ) : null}
                   </TabsContent>
 
@@ -820,7 +896,7 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                   </TabsContent> : null}
                 </Tabs>
 
-                <p className="text-xs text-muted-foreground" role="status">{totalSats ? `Verified maximum sBTC outflow: ${totalSats} sats.` : estimatedTotalSats !== undefined ? `Estimated sBTC outflow: ${estimatedTotalSats.toString()} sats. The verified quote and wallet prompt determine the exact maximum.` : 'Enter an amount to see the estimated sBTC outflow.'} The sponsor pays the STX network fee.</p>
+                <p className="text-xs text-muted-foreground" role="status">{totalSats ? `Verified maximum ${asset.label} outflow: ${totalSats} ${asset.unitLabel}.` : estimatedTotalSats !== undefined ? `Estimated ${asset.label} outflow: ${estimatedTotalSats.toString()} ${asset.unitLabel}. The verified quote and wallet prompt determine the exact maximum.` : `Enter an amount to see the estimated ${asset.label} outflow.`} The sponsor pays the STX network fee.</p>
                 {embedded && !origin ? (
                   <Button size="lg" type="button" onClick={() => void connectWallet()} disabled={Boolean(busy)} className="h-18 w-full text-lg">
                     {busy === 'wallet' ? <Loader2 className="animate-spin" /> : <Wallet />}

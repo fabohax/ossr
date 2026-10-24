@@ -37,8 +37,6 @@ import { OperatorRegistry, type OperatorRegistryReader, toEntry } from './regist
 import { X402Payments, X402Error, encodePayment, type X402Config } from './x402.js';
 import { MemoryQuoteStore, type QuoteStore } from './quote-store.js';
 
-const USDCX_ASSET = { assetId: 'usdcx', contract: 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.usdcx', unit: 'micro-usdcx', decimals: '6' } as const;
-
 const MAX_BODY_BYTES = 256 * 1024;
 const HEX = /^0x(?:[0-9a-fA-F]{2})+$/;
 
@@ -77,6 +75,8 @@ export type RelayApiConfig = {
   adapterContractName?: string;
   /** USDCx is opt-in and requires its own deployed adapter and fixed fee in micro-USDCx. */
   usdcxAdapterContractAddress?: string;
+  usdcxContractAddress?: string;
+  usdcxContractName?: string;
   usdcxSponsorFeeUnits?: bigint;
   sbtcContractAddress?: string;
   sbtcContractName?: string;
@@ -336,6 +336,12 @@ export class OssrRelayApi {
     return result;
   }
 
+  private usdcxAsset(): { assetId: 'usdcx'; contract: string; unit: 'micro-usdcx'; decimals: '6' } {
+    const address = this.config.usdcxContractAddress?.trim() || 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM';
+    const name = this.config.usdcxContractName?.trim() || 'usdcx';
+    return { assetId: 'usdcx', contract: `${address}.${name}`, unit: 'micro-usdcx', decimals: '6' };
+  }
+
   async info(): Promise<object> {
     await this.betaBudget?.ready();
     const paused = await this.isPaused();
@@ -343,13 +349,14 @@ export class OssrRelayApi {
     const adapterContract = this.adapterContract();
     const sbtcContract = this.sbtcContract();
     const dynamicPricing = this.config.dynamicPricing ? await this.dynamicCostFloor() : undefined;
+    const usdcxAsset = this.usdcxAsset();
     return {
       apiVersion: '1',
       relayId: this.config.relayId ?? this.config.operatorId ?? this.config.operator.address,
       network: 'testnet',
       sponsorPrincipal: this.config.operator.address,
       supportedActions: ['sbtc-transfer', ...(usdcxSupported ? ['usdcx-transfer'] : [])],
-      usdcx: usdcxSupported ? { adapterContract: `${this.config.usdcxAdapterContractAddress}.usdcx-sponsored-transfer-v1`, reimbursementAsset: USDCX_ASSET, sponsorFeeUnits: this.config.usdcxSponsorFeeUnits!.toString(), maximumTransferUnits: '10000000', maximumSponsorFeeUnits: '10000' } : undefined,
+      usdcx: usdcxSupported ? { adapterContract: `${this.config.usdcxAdapterContractAddress}.usdcx-sponsored-transfer-v1`, reimbursementAsset: usdcxAsset, sponsorFeeUnits: this.config.usdcxSponsorFeeUnits!.toString(), maximumTransferUnits: '10000000', maximumSponsorFeeUnits: '10000' } : undefined,
       adapterContract,
       sbtcContract,
       limits: {
@@ -426,6 +433,7 @@ export class OssrRelayApi {
     if (usdcx && intent.amountSats > 10_000_000n) throw new RelayError(422, 'AMOUNT_OUT_OF_POLICY', 'USDCx transfer exceeds 10 USDCx.');
     const adapterContract = usdcx ? `${this.config.usdcxAdapterContractAddress}.usdcx-sponsored-transfer-v1` : this.adapterContract();
     const sbtcContract = this.sbtcContract();
+    const usdcxAsset = this.usdcxAsset();
     if (!adapterContract || !sbtcContract) throw new RelayError(503, 'QUOTE_POLICY_INCOMPLETE', 'Adapter and sBTC contract configuration are required.');
     const sponsorFee = usdcx ? this.config.usdcxSponsorFeeUnits! : await this.sponsorFeeSats(intent.amountSats);
     if (sponsorFee > intent.maxSponsorFeeSats) throw new RelayError(422, 'SPONSOR_FEE_TOO_HIGH', usdcx ? 'Quoted sponsor fee exceeds maxSponsorFeeUnits.' : 'Quoted sponsor fee exceeds maxSponsorFeeSats.');
@@ -440,7 +448,7 @@ export class OssrRelayApi {
       sponsorPrincipal: this.config.operator.address,
       origin: intent.origin,
       action: usdcx ? 'usdcx-transfer' : 'sbtc-transfer',
-      reimbursementAsset: usdcx ? USDCX_ASSET : { assetId: 'sbtc', contract: sbtcContract, unit: 'sat', decimals: '8' },
+      reimbursementAsset: usdcx ? usdcxAsset : { assetId: 'sbtc', contract: sbtcContract, unit: 'sat', decimals: '8' },
       adapterContract,
       functionName: 'sponsored-transfer',
       argumentsHash: argumentsHash({ ...intent, quoteId, sponsorFee, expiresAt }),
