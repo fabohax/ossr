@@ -138,7 +138,7 @@ export default function Home() {
     </section>
 
     <section className={styles.final}><span className={styles.kicker}>READY TO GET STARTED?</span><h2>The open relay layer for Stacks.</h2><p>Connect your wallet and experience sponsored transactions on testnet.</p><Button size="lg" className={styles.primary} onClick={() => setTransferOpen(true)}>Connect to OSSR <ArrowRight /></Button></section>
-    <footer className={styles.footer}><div className={styles.brand}><Image src="/ossr-logo-120.png" alt="OSSR" width={60} height={24} /></div><p>Open Stacks Sponsor Relay. Built for the Plebs.</p><div><Link href="/docs">Protocol</Link><Link href="/operators">Operators</Link><Link href="/developers">Developers</Link><a href={nostrProfileUrl} aria-label="OSSR on Nostr" className={styles.nostrLink}>Nostr</a><a href="https://github.com/OSSR-protocol" aria-label="OSSR Protocol on GitHub"><Github /></a></div></footer>
+    <footer className={styles.footer}><div className={styles.brand}><Image src="/ossr-logo-120.png" alt="OSSR" width={60} height={24} /></div><p>Open Stacks Sponsor Relay. Built for the Plebs.</p><div><Link href="/docs">Protocol</Link><Link href="/operators">Operators</Link><Link href="/developers">Developers</Link><a href={nostrProfileUrl} aria-label="OSSR on Nostr" className={styles.nostrLink}>Nostr</a><a href="https://github.com/ossr-protocol" aria-label="OSSR Protocol on GitHub"><Github /></a></div></footer>
 
     <Dialog open={transferOpen} onOpenChange={setTransferOpen}>
       <DialogContent className="w-[min(26.5rem,calc(100vw-1rem))] max-h-[calc(100vh-2rem)] max-w-none overflow-y-auto border-white/15 bg-background/65 p-0 shadow-2xl backdrop-blur-2xl sm:max-w-none">

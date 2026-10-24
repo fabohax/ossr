@@ -32,7 +32,7 @@ export default function OperatorsPage() {
         <Link href="/" className="text-lg font-bold tracking-tight" aria-label="OSSR home">OSSR</Link>
         <nav className="flex items-center gap-5 text-xs text-muted-foreground" aria-label="Operator navigation">
           <Link href="/" className="transition-colors hover:text-foreground">PROTOCOL</Link>
-          <a href="https://github.com/OSSR-protocol" className="inline-flex items-center gap-1.5 transition-colors hover:text-foreground">GITHUB <ExternalLink className="size-3" /></a>
+          <a href="https://github.com/ossr-protocol" className="inline-flex items-center gap-1.5 transition-colors hover:text-foreground">GITHUB <ExternalLink className="size-3" /></a>
         </nav>
       </header>
 
@@ -118,7 +118,7 @@ export default function OperatorsPage() {
         </div>
         <div className="flex flex-wrap gap-3">
           <Link href="/" className="inline-flex h-10 items-center gap-2 rounded-full border border-white/15 px-5 text-sm font-medium transition-colors hover:bg-white/5"><ArrowLeft className="size-4" /> Back home</Link>
-          <a href="https://github.com/OSSR-protocol" className="inline-flex h-10 items-center gap-2 rounded-full bg-primary px-5 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-85">View on GitHub <ArrowRight className="size-4" /></a>
+          <a href="https://github.com/ossr-protocol" className="inline-flex h-10 items-center gap-2 rounded-full bg-primary px-5 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-85">View on GitHub <ArrowRight className="size-4" /></a>
         </div>
       </section>
     </main>

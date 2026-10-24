@@ -27,7 +27,7 @@ export function baseOptions(): BaseLayoutProps {
       },
       {
         type: 'icon',
-        url: 'https://github.com/OSSR-protocol',
+        url: 'https://github.com/ossr-protocol',
         text: 'GitHub',
         label: 'GitHub',
         icon: <Github className="size-4" />,

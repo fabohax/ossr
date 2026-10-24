@@ -30,7 +30,7 @@ export default function DevelopersPage() {
         <nav className="flex items-center gap-5 text-xs text-muted-foreground" aria-label="Developer navigation">
           <Link href="/" className="transition-colors hover:text-foreground">PROTOCOL</Link>
           <Link href="/operators" className="transition-colors hover:text-foreground">OPERATORS</Link>
-          <a href="https://github.com/OSSR-protocol" className="inline-flex items-center gap-1.5 transition-colors hover:text-foreground">GITHUB <ExternalLink className="size-3" /></a>
+          <a href="https://github.com/ossr-protocol" className="inline-flex items-center gap-1.5 transition-colors hover:text-foreground">GITHUB <ExternalLink className="size-3" /></a>
         </nav>
       </header>
 
@@ -41,7 +41,7 @@ export default function DevelopersPage() {
           <p className="mt-7 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">OSSR lets your users authorize one exact sBTC transfer while an independent relay supplies the STX network fee, signs as sponsor, and broadcasts the completed transaction.</p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Link href="/" className="inline-flex h-11 items-center gap-2 rounded-full bg-primary px-6 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-85">Try the interface <ArrowRight className="size-4" /></Link>
-            <a href="https://github.com/OSSR-protocol" className="inline-flex h-11 items-center gap-2 rounded-full border border-white/15 px-6 text-sm font-medium transition-colors hover:bg-white/5">Explore the source <ExternalLink className="size-4" /></a>
+            <a href="https://github.com/ossr-protocol" className="inline-flex h-11 items-center gap-2 rounded-full border border-white/15 px-6 text-sm font-medium transition-colors hover:bg-white/5">Explore the source <ExternalLink className="size-4" /></a>
           </div>
         </div>
         <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/30 shadow-2xl">
@@ -102,7 +102,7 @@ export default function DevelopersPage() {
         </div>
         <div className="flex flex-wrap gap-3">
           <Link href="/" className="inline-flex h-10 items-center gap-2 rounded-full border border-white/15 px-5 text-sm font-medium transition-colors hover:bg-white/5"><ArrowLeft className="size-4" /> Back home</Link>
-          <a href="https://github.com/OSSR-protocol" className="inline-flex h-10 items-center gap-2 rounded-full bg-primary px-5 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-85">View integration code <Code2 className="size-4" /></a>
+          <a href="https://github.com/ossr-protocol" className="inline-flex h-10 items-center gap-2 rounded-full bg-primary px-5 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-85">View integration code <Code2 className="size-4" /></a>
         </div>
       </section>
     </main>

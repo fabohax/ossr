@@ -1,11 +1,18 @@
-.vercel
-.source
+# Local env and secrets
+.env.local
+.env
+.env.*
 
+# Dependency and build output
+node_modules/
+.next/
+.next-readiness/
+.source/
+.vercel/
 .sbtc-faucet/
 
+# Test/build artifacts
 /test-results/
 /playwright-report/
-/.next-readiness/
-
 /live-test-results/
 *.storage-state.json

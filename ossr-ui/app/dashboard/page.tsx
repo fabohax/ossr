@@ -896,7 +896,6 @@ export default function Home({ embedded = false, onWalletChange }: { embedded?: 
                   </TabsContent> : null}
                 </Tabs>
 
-                <p className="text-xs text-muted-foreground" role="status">{totalSats ? `Verified maximum ${asset.label} outflow: ${totalSats} ${asset.unitLabel}.` : estimatedTotalSats !== undefined ? `Estimated ${asset.label} outflow: ${estimatedTotalSats.toString()} ${asset.unitLabel}. The verified quote and wallet prompt determine the exact maximum.` : `Enter an amount to see the estimated ${asset.label} outflow.`} The sponsor pays the STX network fee.</p>
                 {embedded && !origin ? (
                   <Button size="lg" type="button" onClick={() => void connectWallet()} disabled={Boolean(busy)} className="h-18 w-full text-lg">
                     {busy === 'wallet' ? <Loader2 className="animate-spin" /> : <Wallet />}
