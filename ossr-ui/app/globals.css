@@ -25,7 +25,7 @@
   --destructive: oklch(0.67 0.2 24);
   --border: oklch(0.31 0.02 240);
   --input: oklch(0.31 0.02 240);
-  --ring: oklch(0.77 0.14 169);
+  --ring: transparent;
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -134,7 +134,8 @@ body {
     scroll-behavior: auto !important;
   }
 }
-:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+:focus-visible { outline: 2px solid transparent; outline-offset: 3px; }
+:focus { outline: 2px solid transparent; outline-offset: 3px; }
 
 .docs-print-view {
   width: min(100% - 2rem, 900px);
