@@ -41,6 +41,7 @@ export default function OperatorsPage() {
           <span className="font-mono text-[11px] font-semibold tracking-[0.18em] text-primary">TESTNET OPERATOR GUIDE</span>
           <h1 className="mt-5 max-w-4xl text-5xl leading-[0.98] font-semibold tracking-[-0.045em] sm:text-6xl lg:text-7xl">Run a relay.<br /><span className="text-primary">Join the open network.</span></h1>
           <p className="mt-7 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">Operators keep OSSR available by validating transactions, paying Stacks network fees, and broadcasting safely. Registration is permissionless: no administrator chooses who may participate.</p>
+          <a href="https://github.com/ossr-protocol/operator-desktop/releases/tag/v0.1.0" target="_blank" rel="noreferrer" className="mt-7 inline-flex h-11 items-center gap-2 rounded-full bg-primary px-5 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-85">Download desktop client <ExternalLink className="size-3" /></a>
         </div>
         <div className="rounded-2xl border border-primary/20 bg-primary/5 p-5">
           <div className="flex items-start gap-3">

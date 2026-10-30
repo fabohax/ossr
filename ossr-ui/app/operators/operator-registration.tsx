@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { connectTestnetWallet } from '@/lib/connect-wallet';
+import { fetchOperatorRegistryRecord, fetchRelayQuoteDistribution, type OperatorQuoteKey } from '@/lib/operator-registry';
 import { connectedWalletPublicKeyKey, requireTestnetStacksAccount } from '@/lib/stacks-wallet';
 
 const contractAddress = process.env.NEXT_PUBLIC_REGISTRY_CONTRACT_ADDRESS
@@ -23,9 +24,11 @@ export function OperatorRegistration() {
   const [operatorId, setOperatorId] = useState('');
   const [publicKey, setPublicKey] = useState('');
   const [endpoint, setEndpoint] = useState('');
-  const [busy, setBusy] = useState<'connect' | 'register'>();
+  const [busy, setBusy] = useState<'connect' | 'register' | 'registry' | 'quotes'>();
   const [error, setError] = useState('');
   const [txid, setTxid] = useState('');
+  const [registryState, setRegistryState] = useState<{ message: string; record: unknown | null }>({ message: '', record: null });
+  const [quoteKeys, setQuoteKeys] = useState<OperatorQuoteKey[]>([]);
 
   useEffect(() => {
     setAddress(window.localStorage.getItem(connectedAddressKey) ?? '');
@@ -43,6 +46,43 @@ export function OperatorRegistration() {
       else window.localStorage.removeItem(connectedWalletPublicKeyKey);
     } catch (caught) {
       setError(messageFrom(caught));
+    } finally {
+      setBusy(undefined);
+    }
+  }
+
+  async function inspectRegistry() {
+    const normalizedId = operatorId.trim();
+    if (!normalizedId) return setRegistryState({ message: 'Type an operator ID before checking the registry.', record: null });
+    setBusy('registry');
+    setError('');
+    setRegistryState({ message: 'Checking the registry contract…', record: null });
+    try {
+      const record = await fetchOperatorRegistryRecord({
+        contractAddress,
+        contractName,
+        operatorId: normalizedId,
+        ownerAddress: address || undefined,
+      });
+      setRegistryState({ message: 'Registry lookup succeeded.', record });
+    } catch (caught) {
+      setRegistryState({ message: messageFrom(caught), record: null });
+    } finally {
+      setBusy(undefined);
+    }
+  }
+
+  async function inspectQuoteDistribution() {
+    const normalizedEndpoint = endpoint.trim();
+    if (!normalizedEndpoint) return setQuoteKeys([]);
+    setBusy('quotes');
+    setError('');
+    try {
+      const keys = await fetchRelayQuoteDistribution(normalizedEndpoint);
+      setQuoteKeys(keys);
+    } catch (caught) {
+      setError(messageFrom(caught));
+      setQuoteKeys([]);
     } finally {
       setBusy(undefined);
     }
@@ -124,17 +164,46 @@ export function OperatorRegistration() {
           {error && <Alert variant="destructive"><CircleAlert /><AlertTitle>Registration could not continue</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
           {txid && <Alert className="border-primary/30"><CheckCircle2 className="text-primary" /><AlertTitle>Registration submitted</AlertTitle><AlertDescription><a href={`https://explorer.hiro.so/txid/0x${txid.replace(/^0x/, '')}?chain=testnet`} target="_blank" rel="noreferrer">Track transaction <ExternalLink className="ml-1 inline size-3" /></a></AlertDescription></Alert>}
 
-          {address ? (
-            <Button type="submit" size="lg" className="h-11" disabled={Boolean(busy)}>
-              {busy === 'register' ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
-              {busy === 'register' ? 'Waiting for wallet…' : 'Review and register for 10 STX'}
+          <div className="grid gap-2 sm:grid-cols-2">
+            {address ? (
+              <Button type="submit" size="lg" className="h-11" disabled={Boolean(busy)}>
+                {busy === 'register' ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
+                {busy === 'register' ? 'Waiting for wallet…' : 'Review and register for 10 STX'}
+              </Button>
+            ) : (
+              <Button type="button" size="lg" className="h-11" onClick={() => void connectWallet()} disabled={Boolean(busy)}>
+                {busy === 'connect' ? <Loader2 className="animate-spin" /> : <Wallet />}
+                {busy === 'connect' ? 'Connecting…' : 'Connect owner wallet'}
+              </Button>
+            )}
+            <Button type="button" variant="outline" size="lg" className="h-11" disabled={!operatorId || Boolean(busy)} onClick={() => void inspectRegistry()}>
+              {busy === 'registry' ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
+              {busy === 'registry' ? 'Checking registry…' : 'Check registry'}
             </Button>
-          ) : (
-            <Button type="button" size="lg" className="h-11" onClick={() => void connectWallet()} disabled={Boolean(busy)}>
-              {busy === 'connect' ? <Loader2 className="animate-spin" /> : <Wallet />}
-              {busy === 'connect' ? 'Connecting…' : 'Connect owner wallet'}
-            </Button>
-          )}
+          </div>
+
+          <div className="grid gap-3 rounded-xl border border-white/10 bg-black/20 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-medium">Quote distribution</h3>
+              <Button type="button" variant="secondary" size="sm" className="h-8" disabled={!endpoint || Boolean(busy)} onClick={() => void inspectQuoteDistribution()}>
+                {busy === 'quotes' ? <Loader2 className="animate-spin" /> : 'Inspect /v1/info'}
+              </Button>
+            </div>
+            {registryState.message && <p className="text-xs text-muted-foreground">{registryState.message}</p>}
+            {registryState.record ? <pre className="overflow-x-auto rounded-lg border border-white/10 bg-black/40 p-3 font-mono text-[11px] leading-5 text-foreground">{JSON.stringify(registryState.record, null, 2)}</pre> : null}
+            {quoteKeys.length ? (
+              <ul className="space-y-2 text-xs text-muted-foreground">
+                {quoteKeys.map((entry, index) => (
+                  <li key={`${entry.keyId}-${index}`} className="rounded-lg border border-white/10 bg-black/30 p-2 font-mono">
+                    <div className="flex items-center justify-between gap-3"><span className="truncate">{entry.keyId || 'active'}</span>{entry.status ? <span className="text-primary">{entry.status}</span> : null}</div>
+                    <div className="mt-1 truncate text-[10px] text-foreground/80">{entry.publicKey}</div>
+                  </li>
+                ))}
+              </ul>
+            ) : endpoint ? (
+              <p className="text-xs text-muted-foreground">No active quote keys were returned from the relay metadata yet.</p>
+            ) : null}
+          </div>
         </form>
       </CardContent>
     </Card>

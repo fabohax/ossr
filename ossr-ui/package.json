@@ -4,10 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test:unit": "tsx --test lib/ossr.test.ts lib/diagnostics.test.ts lib/relay-access.test.ts lib/chain-status.test.ts lib/relay-url.test.ts lib/stacks-wallet.test.ts lib/sbtc-balance.test.ts && tsx lib/quote-verification.test.ts && node --test scripts/validate-config.test.mjs",
+    "test:unit": "tsx --test lib/ossr.test.ts lib/diagnostics.test.ts lib/relay-access.test.ts lib/chain-status.test.ts lib/relay-url.test.ts lib/stacks-wallet.test.ts lib/sbtc-balance.test.ts lib/operator-registry.test.ts && tsx lib/quote-verification.test.ts && node --test scripts/validate-config.test.mjs",
     "test:browser": "node scripts/browser-tests.mjs",
     "test:live": "playwright test --config=playwright.live.config.ts"
   },

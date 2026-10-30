@@ -1,0 +1,1071 @@
+'use client';
+
+import { setRelayAccessToken, clearRelayAccess } from '@/lib/relay-access';
+import { measureOperation } from '@/lib/diagnostics';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowRight, CheckCircle2, ChevronDown, CircleAlert, ExternalLink, Info, Loader2, LogOut, Radio, RefreshCw, Send, ShieldCheck, Wallet } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList } from '@/components/ui/combobox';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Separator } from '@/components/ui/separator';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { connectTestnetWallet } from '@/lib/connect-wallet';
+import { assetConfig, assetOptions, type AssetId } from '@/lib/asset-selection';
+import { cachedSbtcBalance, defaultSbtcContract, fetchDisplaySbtcBalance } from '@/lib/sbtc-balance';
+import { approvedWalletProviderIds, connectedWalletPublicKeyKey, readCachedStacksAccount, requireTestnetStacksAccount } from '@/lib/stacks-wallet';
+import { configuredQuoteTrust, validateIntent, verifyQuote, type TransferIntent } from '@/lib/quote-verification';
+import {
+  validateSignedWalletTransaction,
+  fetchStacksTipHeight,
+  adapterErrorFromStatus,
+  describeChainStatus,
+  extractRawTransaction,
+  fetchRelayInfo,
+  fetchSbtcBalance,
+  fetchSponsorshipStatus,
+  fetchUsdcxBalance,
+  isFailedChainStatus,
+  isTerminalChainStatus,
+  likelyFailureCause,
+  prepareWalletContractCall,
+  prepareUnsignedSponsoredTransaction,
+  requestQuote,
+  RelayRequestError,
+  submitSponsorship,
+  NetworkRequestError,
+  type QuoteResponse,
+  type RelayInfo,
+  type SbtcBalance,
+  type SponsorshipResponse,
+  type SponsorshipStatus,
+} from '../../lib/ossr';
+
+const connectedAddressKey = 'ossr-ui:connected-stx-address';
+const recentRecipientsKey = 'ossr-ui:recent-recipients';
+const configuredQuoteRefreshSeconds = Number(process.env.NEXT_PUBLIC_OSSR_QUOTE_REFRESH_SECONDS ?? '30');
+const quoteRefreshSeconds = Number.isFinite(configuredQuoteRefreshSeconds) && configuredQuoteRefreshSeconds >= 5
+  ? Math.floor(configuredQuoteRefreshSeconds)
+  : 30;
+
+function savedRecentRecipients(): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(recentRecipientsKey) ?? '[]');
+    return Array.isArray(saved) ? saved.filter((value): value is string => typeof value === 'string').slice(0, 5) : [];
+  } catch {
+    return [];
+  }
+}
+
+function estimatedSponsorFee(amount: bigint, limits?: RelayInfo['limits']): bigint {
+  const fixed = limits?.sponsorFeeSats && /^\d+$/.test(limits.sponsorFeeSats)
+    ? BigInt(limits.sponsorFeeSats)
+    : undefined;
+  const legacyPercentage = limits?.sponsorFeeBps && /^\d+$/.test(limits.sponsorFeeBps)
+    ? (amount * BigInt(limits.sponsorFeeBps) + 9_999n) / 10_000n
+    : undefined;
+  const scale = limits?.pricingScaleSats && /^[1-9]\d*$/.test(limits.pricingScaleSats)
+    ? BigInt(limits.pricingScaleSats)
+    : 100n;
+  const growth = limits?.pricingGrowthSats && /^[1-9]\d*$/.test(limits.pricingGrowthSats)
+    ? BigInt(limits.pricingGrowthSats)
+    : 2n;
+  const logarithmic = growth * ceilLog2(1n + (amount + scale - 1n) / scale);
+  const requested = fixed ?? legacyPercentage ?? logarithmic;
+  const minimum = BigInt(limits?.minimumSponsorFeeSats && /^\d+$/.test(limits.minimumSponsorFeeSats) ? limits.minimumSponsorFeeSats : '1');
+  const breakEven = BigInt(limits?.breakEvenFeeSats && /^\d+$/.test(limits.breakEvenFeeSats) ? limits.breakEvenFeeSats : '1');
+  return [requested, minimum, breakEven].reduce((maximum, fee) => fee > maximum ? fee : maximum, 1n);
+}
+
+function ceilLog2(value: bigint): bigint {
+  if (value <= 1n) return 0n;
+  let exponent = 0n;
+  let power = 1n;
+  while (power < value) {
+    power <<= 1n;
+    exponent += 1n;
+  }
+  return exponent;
+}
+
+function defaultRelayUrl(): string {
+  return process.env.NEXT_PUBLIC_OSSR_RELAY_URL || '/relay';
+}
+
+type DisplayError = { title: string; message: string; action?: string; code?: string };
+
+const errorGuidance: Record<string, Pick<DisplayError, 'title' | 'action'>> = {
+  SPONSORSHIPS_PAUSED: { title: 'Sponsorships paused by operator', action: 'Wait for the operator to resume. Existing transaction receipts remain available.' },
+  PAUSE_STATE_UNAVAILABLE: { title: 'Operator pause state unavailable', action: 'Wait for the operator to restore its controls before requesting a fresh quote.' },
+  BETA_TRANSFER_LIMIT: { title: 'Beta transfer limit exceeded', action: 'Reduce the transfer amount and request a fresh quote.' },
+  BETA_WALLET_LIMIT: { title: 'Wallet daily beta limit reached', action: 'Wait until the operator’s configured daily reset before requesting another transfer.' },
+  BETA_DAILY_LIMIT: { title: 'Relay daily beta limit reached', action: 'Wait until the operator’s configured daily reset.' },
+  BETA_STX_BUDGET: { title: 'Sponsor daily STX budget reached', action: 'Wait for the operator to reconcile its budget. Existing receipts remain available.' },
+  BETA_LOSS_CAP: { title: 'Sponsor exposure cap reached', action: 'The operator must reconcile existing transactions before approving more transfers.' },
+  BETA_RESERVATION_PENDING: { title: 'This quote already has a signed transaction', action: 'Check its chain status and ask the operator to reconcile it. Do not sign another sponsorship for this quote.' },
+  BETA_ACCOUNTING_MISMATCH: { title: 'Operator accounting needs reconciliation', action: 'Save the explorer link and contact the operator. Do not resubmit this payment.' },
+  BETA_ACCESS_REQUIRED: { title: 'Beta access required', action: 'Enter your invited-wallet credential in Advanced, then request a fresh quote.' },
+  BETA_ORIGIN_MISMATCH: { title: 'Beta credential belongs to another wallet', action: 'Connect the invited wallet or enter its credential in Advanced.' },
+  WALLET_NOT_ALLOWED: { title: 'Wallet is not invited', action: 'Contact the operator for testnet beta access.' },
+  RATE_LIMITED: { title: 'Too many requests', action: 'Wait until the next minute and request a fresh quote. Check an existing receipt before retrying submission.' },
+  SIMULATION_UNAVAILABLE: { title: 'Simulation unavailable', action: 'No broadcast was approved. Wait and request a fresh quote.' },
+  SIMULATION_STALE: { title: 'Simulation is stale', action: 'No broadcast was approved. Request a fresh quote later.' },
+  SIMULATION_INVALID_RESPONSE: { title: 'Simulation could not be verified', action: 'No broadcast was approved. Wait for the relay to recover.' },
+  INSUFFICIENT_STX: { title: 'Sponsor needs testnet STX', action: 'The operator must fund the sponsor before you request a new quote.' },
+  BROADCAST_FAILED: { title: 'Broadcast failed', action: 'Check relay status and the explorer before attempting another transfer.' },
+  QUOTE_EXPIRED: { title: 'This quote has expired', action: 'Go back and request a fresh quote, then approve it promptly.' },
+  QUOTE_ALREADY_USED: { title: 'This quote was already used', action: 'Check the existing transaction before starting another transfer.' },
+  QUOTE_REQUEST_MISMATCH: { title: 'Quote retry does not match', action: 'Check the existing request outcome before creating another transfer.' },
+  QUOTE_NOT_FOUND: { title: 'Quote unavailable', action: 'Request a fresh quote before signing.' },
+  QUOTE_ORIGIN_MISMATCH: { title: 'The connected wallet changed', action: 'Reconnect the wallet that requested this quote, or request a new quote.' },
+  ORIGIN_MISMATCH: { title: 'The signing wallet does not match', action: 'Reconnect the wallet shown in the transfer details and try again.' },
+  INVALID_ORIGIN_SIGNATURE: { title: 'The wallet signature could not be verified', action: 'Reject any pending wallet request, then approve the transaction again.' },
+  SPONSOR_FEE_TOO_HIGH: { title: 'The sponsor fee is above your limit', action: 'Go back, request a new quote, and review the updated fee.' },
+  SIMULATION_FAILED: { title: 'The transaction would fail on-chain', action: 'Check that your wallet has enough testnet sBTC for the amount and sponsor fee, then request a new quote.' },
+  INVALID_POST_CONDITIONS: { title: 'The wallet changed the transfer safeguards', action: 'Try again with a wallet that supports the exact post-conditions shown in this review.' },
+  QUOTE_TRANSACTION_MISMATCH: { title: 'The signed transaction does not match this quote', action: 'Go back and request a new quote before signing again.' },
+  WRONG_NETWORK: { title: 'Your wallet is on the wrong network', action: 'Switch the wallet to Stacks testnet and try again.' },
+  UNSUPPORTED_AUTH: { title: 'The wallet did not create a sponsored transaction', action: 'Use a wallet that supports sponsored Stacks contract calls.' },
+  FEE_OUT_OF_POLICY: { title: 'The network fee is outside relay limits', action: 'Request a new quote later, when testnet fees have changed.' },
+};
+
+function displayError(error: unknown): DisplayError {
+  if (error instanceof NetworkRequestError) {
+    return {
+      title: 'A network request failed',
+      message: `Could not reach ${error.url}.`,
+      action: error.submission
+        ? 'Submission was attempted. Check relay status before requesting another transfer; the transaction may already be broadcast.'
+        : 'This request did not submit a transaction. Check your network connection and whether this endpoint is blocked.',
+    };
+  }
+  if (error instanceof RelayRequestError) {
+    const guidance = error.code ? errorGuidance[error.code] : undefined;
+    return {
+      title: guidance?.title ?? (error.status === 422 ? 'The relay could not approve this transaction' : 'The relay rejected the request'),
+      message: error.message,
+      action: guidance?.action,
+      code: [error.code, `HTTP ${error.status}`].filter(Boolean).join(' · '),
+    };
+  }
+  if (error instanceof DOMException && error.name === 'TimeoutError') return { title: 'Request timed out', message: 'If submission was in progress, the transaction may already be broadcast. Check the relay and explorer before another transfer.' };
+  if (error instanceof TypeError && /fetch|network|failed/i.test(error.message)) {
+    return { title: 'The relay could not be reached', message: 'The relay may be offline or blocked by your network.', action: 'If this happened during submission, the transaction may already be broadcast. Check relay status before requesting another transfer.' };
+  }
+  return {
+    title: 'We couldn\'t complete that request',
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
+export function Dashboard({ embedded = false, onWalletChange }: { embedded?: boolean; onWalletChange?: (address: string) => void }) {
+  const [receipt, setReceipt] = useState<{ response: SponsorshipResponse; intent: TransferIntent; quote: QuoteResponse }>();
+  const intentRef = useRef('');
+  const [relayUrl, setRelayUrl] = useState(defaultRelayUrl);
+  const [relayInfo, setRelayInfo] = useState<RelayInfo>();
+  const [relayUnavailable, setRelayUnavailable] = useState(false);
+  const [accessToken, setAccessToken] = useState('');
+  useEffect(() => { clearRelayAccess(); setAccessToken(''); }, [relayUrl]);
+  const [origin, setOrigin] = useState('');
+  const [recipient, setRecipient] = useState('');
+  const [recentRecipients, setRecentRecipients] = useState(savedRecentRecipients);
+  const [amountSats, setAmountSats] = useState('');
+  const [maxSponsorFeeSats, setMaxSponsorFeeSats] = useState('1');
+  const [memo, setMemo] = useState('');
+  const [quoteResponse, setQuoteResponse] = useState<QuoteResponse>();
+  const [quoteTipHeight, setQuoteTipHeight] = useState<number>();
+  const [quoteHeightUnavailable, setQuoteHeightUnavailable] = useState(false);
+  const [sponsorship, setSponsorship] = useState<SponsorshipResponse>();
+  const [status, setStatus] = useState<SponsorshipStatus>();
+  const [sbtcBalance, setSbtcBalance] = useState<SbtcBalance>();
+  const [balanceUnavailable, setBalanceUnavailable] = useState(false);
+  const [showTransferInfo, setShowTransferInfo] = useState(false);
+  const [showAssetMenu, setShowAssetMenu] = useState(false);
+  const [assetId, setAssetId] = useState<AssetId>('sbtc');
+  const asset = assetConfig(assetId);
+  const usdcxContract = relayInfo?.usdcx?.reimbursementAsset?.contract || process.env.NEXT_PUBLIC_OSSR_USDCX_CONTRACT || 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.mock-usdcx-token';
+  const balanceContract = assetId === 'usdcx' ? usdcxContract : relayInfo?.sbtcContract || process.env.NEXT_PUBLIC_OSSR_SBTC_CONTRACT || defaultSbtcContract;
+  const [busy, setBusy] = useState<string>();
+  const [faucetTxid, setFaucetTxid] = useState('');
+  const [error, setError] = useState<DisplayError>();
+  const [autoRelayChecked, setAutoRelayChecked] = useState(false);
+  const [transactionModalOpen, setTransactionModalOpen] = useState(false);
+  const recipientComboboxPortalRef = useRef<HTMLDivElement>(null);
+
+  const totalSats = useMemo(() => {
+    if (!quoteResponse?.quote.sponsorFee || !/^\d+$/.test(amountSats)) return undefined;
+    return (BigInt(amountSats) + BigInt(quoteResponse.quote.sponsorFee)).toString();
+  }, [amountSats, quoteResponse]);
+
+  const defaultSponsorFeeSats = useMemo(() => {
+    const amount = /^[1-9]\d*$/.test(amountSats) ? BigInt(amountSats) : 0n;
+    return estimatedSponsorFee(amount, relayInfo?.limits).toString();
+  }, [amountSats, relayInfo]);
+
+  function setAmountByPercent(percent: number) {
+    if (!sbtcBalance || !/^\d+$/.test(sbtcBalance.balanceSats)) return;
+    const balance = BigInt(sbtcBalance.balanceSats);
+    const fraction = BigInt(Math.max(0, Math.min(100, percent)) * 1000) / 1000n;
+    const target = balance * BigInt(percent) / 100n;
+    const fee = estimatedSponsorFee(target, relayInfo?.limits);
+    const safe = balance > fee ? balance - fee : 0n;
+    const candidate = percent === 100 ? safe : (safe * BigInt(percent) / 100n);
+    setAmountSats(candidate.toString());
+  }
+
+  function setMaximumAmount() {
+    if (!sbtcBalance || !/^\d+$/.test(sbtcBalance.balanceSats)) return;
+    const balance = BigInt(sbtcBalance.balanceSats);
+    let low = 0n;
+    let high = balance;
+    while (low < high) {
+      const candidate = (low + high + 1n) / 2n;
+      if (candidate + estimatedSponsorFee(candidate, relayInfo?.limits) <= balance) low = candidate;
+      else high = candidate - 1n;
+    }
+    setAmountSats(low.toString());
+  }
+
+  const memoByteLength = useMemo(() => new TextEncoder().encode(memo).length, [memo]);
+
+  const estimatedTotalSats = useMemo(() => {
+    if (!/^[1-9]\d*$/.test(amountSats) || !/^\d+$/.test(defaultSponsorFeeSats)) return undefined;
+    return BigInt(amountSats) + BigInt(defaultSponsorFeeSats);
+  }, [amountSats, defaultSponsorFeeSats]);
+
+  const insufficientBalance = useMemo(() => {
+    if (!sbtcBalance || estimatedTotalSats === undefined || !/^\d+$/.test(sbtcBalance.balanceSats)) return false;
+    return estimatedTotalSats > BigInt(sbtcBalance.balanceSats);
+  }, [estimatedTotalSats, sbtcBalance]);
+
+  const txid = sponsorship?.transactionId ?? sponsorship?.transaction_id;
+  const provisionalStatus = Boolean(status?.status.startsWith('dropped_'));
+  const failed = isFailedChainStatus(status?.status);
+  const terminal = isTerminalChainStatus(status?.status);
+
+  async function loadRelayInfo({ quiet = false }: { quiet?: boolean } = {}) {
+    try {
+      const info = await fetchRelayInfo(relayUrl);
+      setRelayInfo(info); setRelayUnavailable(false);
+      if (!quiet) setError(undefined);
+      return info;
+    } catch (error) { setRelayUnavailable(true); throw error; }
+  }
+
+  const currentIntent: TransferIntent = { relayUrl, origin, recipient, amountSats, maxSponsorFeeSats, ...(memo ? { memo: normalizeMemo(memo) } : {}), assetId };
+  const intentKey = JSON.stringify(currentIntent);
+  intentRef.current = intentKey;
+  const fieldErrors = validateIntent(currentIntent);
+  useEffect(() => { setQuoteResponse(undefined); }, [intentKey]);
+  useEffect(() => {
+    if (!quoteResponse || sponsorship) return;
+    let cancelled = false;
+    let inFlight = false;
+    const refreshHeight = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try { const height = await fetchStacksTipHeight(); if (!cancelled) { setQuoteTipHeight(height); setQuoteHeightUnavailable(false); } }
+      catch { if (!cancelled) setQuoteHeightUnavailable(true); }
+      finally { inFlight = false; }
+    };
+    void refreshHeight();
+    const refreshVisible = () => { if (document.visibilityState === 'visible') void refreshHeight(); };
+    const interval = window.setInterval(refreshVisible, 10_000);
+    document.addEventListener('visibilitychange', refreshVisible);
+    return () => { cancelled = true; clearInterval(interval); document.removeEventListener('visibilitychange', refreshVisible); };
+  }, [quoteResponse, sponsorship]);
+
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const { getLocalStorage } = await import('@stacks/connect');
+        // Focus returns after wallet approval too. Never start an interactive
+        // address request here, or each approval can trigger another prompt.
+        const account = readCachedStacksAccount(getLocalStorage(), window.localStorage.getItem(connectedAddressKey) ?? undefined);
+        if (!cancelled) {
+          const address = account?.address && /^(ST|SN)/.test(account.address) ? account.address : '';
+          setOrigin(address);
+          if (window.localStorage.getItem(connectedAddressKey) !== address) {
+            window.localStorage.removeItem(connectedWalletPublicKeyKey);
+          }
+          if (address) window.localStorage.setItem(connectedAddressKey, address);
+          else window.localStorage.removeItem(connectedAddressKey);
+          onWalletChange?.(address);
+        }
+      } catch { if (!cancelled) setOrigin(''); }
+    };
+    void refresh();
+    window.addEventListener('focus', refresh);
+    window.addEventListener('storage', refresh);
+    const refreshVisible = () => { if (document.visibilityState === 'visible') void refresh(); };
+    document.addEventListener('visibilitychange', refreshVisible);
+    return () => { cancelled = true; window.removeEventListener('focus', refresh); window.removeEventListener('storage', refresh); document.removeEventListener('visibilitychange', refreshVisible); };
+  }, [onWalletChange]);
+
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('ossr-ui:submitted-transfer') ?? 'null');
+      if (saved && /^(?:0x)?[0-9a-f]{64}$/i.test(saved.response?.transaction_id) && saved.intent && !Object.keys(validateIntent(saved.intent)).length && saved.quote?.quote && /^[0-9]+$/.test(saved.quote.quote.sponsorFee)) {
+        setReceipt(saved);
+        setSponsorship(saved.response);
+      }
+    } catch { /* Corrupt local receipt cannot initiate a submission. */ }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAutoRelayChecked(false);
+    setRelayInfo(undefined);
+    setRelayUnavailable(false);
+    const loadAvailableRelay = async () => {
+      setBusy(current => current ?? 'relay');
+      try {
+        const info = await fetchRelayInfo(relayUrl);
+        if (cancelled) return;
+        setRelayInfo(info); setRelayUnavailable(false);
+      } catch {
+        if (!cancelled) { setRelayInfo(undefined); setRelayUnavailable(true); }
+      } finally {
+        if (!cancelled) {
+          setAutoRelayChecked(true);
+          setBusy(current => current === 'relay' ? undefined : current);
+        }
+      }
+    };
+    void loadAvailableRelay();
+    return () => {
+      cancelled = true;
+    };
+  }, [relayUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshPricing = async () => {
+      try {
+        const info = await fetchRelayInfo(relayUrl);
+        if (!cancelled) { setRelayInfo(info); setRelayUnavailable(false); }
+      } catch {
+        if (!cancelled) setRelayUnavailable(true);
+        // Preserve last pricing for display, but disclose failure and disable approval.
+      }
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refreshPricing();
+    };
+    const interval = window.setInterval(refreshPricing, quoteRefreshSeconds * 1_000);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [relayUrl]);
+
+  useEffect(() => {
+    setMaxSponsorFeeSats(defaultSponsorFeeSats);
+  }, [defaultSponsorFeeSats]);
+
+  useEffect(() => {
+    if (assetId === 'usdcx' && relayInfo && !relayInfo.supportedActions.includes('usdcx-transfer')) {
+      setAssetId('sbtc');
+    }
+  }, [assetId, relayInfo]);
+
+  useEffect(() => {
+    setBalanceUnavailable(false);
+    if (!origin) {
+      setSbtcBalance(undefined);
+      return;
+    }
+    setSbtcBalance(current => current?.address === origin && current.token === `${balanceContract}::sbtc-token`
+      ? current : cachedSbtcBalance(origin, balanceContract));
+    window.localStorage.setItem(connectedAddressKey, origin);
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const balance = assetId === 'usdcx'
+          ? await fetchUsdcxBalance(origin, usdcxContract)
+          : await fetchDisplaySbtcBalance(origin, balanceContract);
+        if (!cancelled) {
+          setSbtcBalance(balance);
+          setBalanceUnavailable(false);
+        }
+      } catch {
+        if (!cancelled) setBalanceUnavailable(true);
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(refresh, 20_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [origin, assetId, balanceContract, usdcxContract]);
+
+  useEffect(() => {
+    if (!txid) return;
+    if (terminal) return;
+    let cancelled = false;
+    const startedAt = Date.now();
+    let polling = false;
+    const poll = async () => {
+      if (cancelled || polling) return;
+      polling = true;
+      if (Date.now() - startedAt > 15 * 60 * 1000) setError({ title: 'Confirmation is taking longer than expected', message: 'Your transaction may still confirm. Follow the explorer link; do not resubmit to retry confirmation.' });
+      try {
+        const next = await fetchSponsorshipStatus(receipt?.intent.relayUrl ?? relayUrl, txid);
+        if (!cancelled) {
+          setStatus(next);
+          if (isTerminalChainStatus(next.status)) {
+            setError(current => current?.title === 'Confirmation unavailable' || current?.title === 'Confirmation is taking longer than expected' ? undefined : current);
+          }
+        }
+      } catch {
+        if (!cancelled) setError({ title: 'Confirmation unavailable', message: 'This transaction may already be broadcast. Use its explorer link; do not resubmit to retry confirmation.' });
+        // Keep the saved receipt visible while the relay is unavailable.
+      } finally {
+        polling = false;
+      }
+    };
+    void poll();
+    const interval = window.setInterval(poll, 1_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [relayUrl, receipt, txid, terminal]);
+
+  useEffect(() => {
+    if (!terminal) return;
+    setBusy(undefined);
+  }, [terminal]);
+
+  async function run<T>(label: string, operation: () => Promise<T>): Promise<T | undefined> {
+    setBusy(label);
+    setError(undefined);
+    try {
+      return await operation();
+    } catch (caught) {
+      setError(displayError(caught));
+      return undefined;
+    } finally {
+      setBusy(undefined);
+    }
+  }
+
+  async function requestTestnetSbtc() {
+    await run('faucet', async () => {
+      const address = origin;
+      const post = async (body: Record<string, unknown>) => {
+        const response = await fetch('/api/testnet-sbtc', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error ?? 'Testnet sBTC request failed.');
+        return result;
+      };
+      const challenge = await post({ address });
+      const { request } = await import('@stacks/connect');
+      const signed = await request('stx_signMessage', { message: challenge.message });
+      const result = await post({ address, ...challenge, signature: signed.signature, publicKey: signed.publicKey });
+      setFaucetTxid(result.txid);
+    });
+  }
+
+  function clearConnectedWalletState() {
+    window.localStorage.removeItem(connectedAddressKey);
+    window.localStorage.removeItem(connectedWalletPublicKeyKey);
+    setOrigin('');
+    setSbtcBalance(undefined);
+    setQuoteResponse(undefined);
+    onWalletChange?.('');
+  }
+
+  async function connectWallet({ replaceCurrent = false }: { replaceCurrent?: boolean } = {}) {
+    await run('wallet', async () => {
+      const { disconnect } = await import('@stacks/connect');
+      if (replaceCurrent) {
+        disconnect();
+        clearConnectedWalletState();
+      }
+      const response = await connectTestnetWallet();
+      const account = requireTestnetStacksAccount(response);
+      setOrigin(account.address);
+      window.localStorage.setItem(connectedAddressKey, account.address);
+      if (account.publicKey) window.localStorage.setItem(connectedWalletPublicKeyKey, account.publicKey);
+      else window.localStorage.removeItem(connectedWalletPublicKeyKey);
+      onWalletChange?.(account.address);
+    });
+  }
+
+  async function loadRelay() {
+    await run('relay', async () => {
+      await loadRelayInfo();
+    });
+  }
+
+  async function createQuote() {
+    await run('quote', async () => {
+      if (Object.keys(fieldErrors).length) throw new Error('Correct the transfer fields first.');
+      const snapshot = { ...currentIntent };
+      const key = JSON.stringify(snapshot);
+      const trust = configuredQuoteTrust();
+      const [quote, height, balance] = await Promise.all([
+        requestQuote({ ...snapshot, assetId }),
+        fetchStacksTipHeight(),
+        assetId === 'usdcx' ? fetchUsdcxBalance(snapshot.origin, usdcxContract) : fetchSbtcBalance(snapshot.origin, trust.sbtcContract),
+      ]);
+      verifyQuote(quote, { ...snapshot, assetId }, trust, height, balance.balanceSats);
+      if (intentRef.current !== key) throw new Error('Transfer changed while requesting the quote. Request a fresh quote.');
+      setQuoteTipHeight(height); setQuoteHeightUnavailable(false);
+      setQuoteResponse(quote); setSbtcBalance(balance);
+      setSponsorship(undefined); setStatus(undefined);
+      const updatedRecipients = [snapshot.recipient, ...recentRecipients.filter(address => address !== snapshot.recipient)].slice(0, 5);
+      setRecentRecipients(updatedRecipients); window.localStorage.setItem(recentRecipientsKey, JSON.stringify(updatedRecipients));
+      setBusy('submit');
+      await signAndSubmit(quote, snapshot);
+    });
+  }
+
+  function resetForNewQuote() {
+    setTransactionModalOpen(false);
+    setQuoteResponse(undefined);
+    setReceipt(undefined);
+    window.localStorage.removeItem('ossr-ui:submitted-transfer');
+    setSponsorship(undefined);
+    setStatus(undefined);
+    setError(undefined);
+  }
+
+  async function disconnectWallet() {
+    clearRelayAccess(); setAccessToken('');
+    await run('wallet', async () => {
+      const { disconnect } = await import('@stacks/connect');
+      disconnect();
+      clearConnectedWalletState();
+    });
+  }
+
+  async function signAndSubmit(quoteToSubmit: QuoteResponse, snapshot: TransferIntent) {
+    if (intentRef.current !== JSON.stringify(snapshot)) throw new Error('Transfer changed. Request a fresh quote.');
+    const { getSelectedProviderId, getLocalStorage } = await import('@stacks/connect');
+    const providerId = getSelectedProviderId();
+    if (!approvedWalletProviderIds.includes(providerId ?? '')) throw new Error('Use Leather or Xverse for origin-only sponsored signing.');
+    const assertWalletSession = () => {
+      const address = window.localStorage.getItem(connectedAddressKey) ?? '';
+      const account = readCachedStacksAccount(getLocalStorage(), address);
+      if (getSelectedProviderId() !== providerId || address !== snapshot.origin || account?.address !== snapshot.origin) {
+        throw new Error('Wallet account changed. Request a fresh quote.');
+      }
+    };
+    assertWalletSession();
+    const trust = configuredQuoteTrust();
+    const [height, balance] = await Promise.all([
+      fetchStacksTipHeight(),
+      assetId === 'usdcx' ? fetchUsdcxBalance(snapshot.origin, usdcxContract) : fetchSbtcBalance(snapshot.origin, trust.sbtcContract),
+    ]);
+    verifyQuote(quoteToSubmit, { ...snapshot, assetId }, trust, height, balance.balanceSats);
+
+    const prepared = prepareWalletContractCall({
+      quote: quoteToSubmit.quote,
+      recipient: snapshot.recipient,
+      amountSats: snapshot.amountSats,
+      ...(snapshot.memo !== undefined ? { memo: snapshot.memo } : {}),
+    });
+    const walletResult = await measureOperation('wallet', () => signPreparedTransactionWithCompatibleWallet(prepared, snapshot.origin, async () => {
+      // Nonce lookup can take long enough for the account, intent, or quote to change.
+      const [latestHeight, latestBalance] = await Promise.all([
+        fetchStacksTipHeight(),
+        assetId === 'usdcx' ? fetchUsdcxBalance(snapshot.origin, usdcxContract) : fetchSbtcBalance(snapshot.origin, trust.sbtcContract),
+      ]);
+      verifyQuote(quoteToSubmit, { ...snapshot, assetId }, trust, latestHeight, latestBalance.balanceSats);
+      assertWalletSession();
+      if (intentRef.current !== JSON.stringify(snapshot)) throw new Error('Transfer changed. Request a fresh quote.');
+    }));
+    const transaction = extractRawTransaction(walletResult);
+    if (!transaction) throw new Error('Wallet did not return raw signed transaction bytes. This wallet may only support sign-and-broadcast contract calls.');
+    validateSignedWalletTransaction(transaction, prepared, snapshot.origin);
+    assertWalletSession();
+    if (intentRef.current !== JSON.stringify(snapshot)) throw new Error('Transfer changed during signing. Request a fresh quote.');
+    const [submissionHeight, submissionBalance] = await Promise.all([
+      fetchStacksTipHeight(),
+      assetId === 'usdcx' ? fetchUsdcxBalance(snapshot.origin, usdcxContract) : fetchSbtcBalance(snapshot.origin, trust.sbtcContract),
+    ]);
+    verifyQuote(quoteToSubmit, { ...snapshot, assetId }, trust, submissionHeight, submissionBalance.balanceSats);
+    if (intentRef.current !== JSON.stringify(snapshot)) throw new Error('Transfer changed before submission. Request a fresh quote.');
+    let response: SponsorshipResponse;
+    try {
+      response = await submitSponsorship({
+        relayUrl: snapshot.relayUrl,
+        quoteId: quoteToSubmit.quote.quoteId,
+        transaction,
+        user: snapshot.origin,
+      });
+    } catch (caught) {
+      const obsoleteQuote = caught instanceof RelayRequestError
+        && ['QUOTE_EXPIRED', 'QUOTE_NOT_FOUND'].includes(caught.code ?? '');
+      if (!obsoleteQuote) throw caught;
+      setQuoteResponse(undefined);
+      throw new Error('The quote is obsolete. Request a fresh quote; no automatic resubmission was attempted.');
+    }
+    const saved = { response, intent: snapshot, quote: quoteToSubmit };
+    setReceipt(saved);
+    setSponsorship(response);
+    setTransactionModalOpen(true);
+    try { window.localStorage.setItem('ossr-ui:submitted-transfer', JSON.stringify(saved)); } catch { setError({ title: 'Transaction broadcast', message: 'Browser storage is unavailable. Save the explorer link before refreshing.' }); }
+  }
+
+  const OutcomeTitle = embedded ? 'h2' : DialogTitle;
+  const OutcomeDescription = embedded ? 'p' : DialogDescription;
+  const transactionContent = (
+    <div aria-live="polite" aria-atomic="true">
+{status?.status === 'success' ? (
+              <div className="grid place-items-center gap-5 px-6 pt-16 pb-8 text-center">
+                <div className="grid size-20 place-items-center rounded-full bg-primary/15 text-primary ring-1 ring-primary/25">
+                  <CheckCircle2 className="size-11" strokeWidth={1.8} />
+                </div>
+                <DialogHeader className="items-center">
+                  <OutcomeTitle className="text-2xl">Transaction successful</OutcomeTitle>
+                  <OutcomeDescription id="transaction-modal-description">Your sponsored sBTC transfer has confirmed on Stacks testnet.</OutcomeDescription>
+                </DialogHeader>
+                <dl className="w-full rounded-lg border bg-muted/30 p-4 text-sm">
+                  <ReviewRow label="Amount" value={`${receipt?.intent.amountSats ?? amountSats} sats`} emphasized />
+                  <ReviewRow label="Fee" value={`${(receipt?.quote ?? quoteResponse)?.quote.sponsorFee ?? '—'} sats`} />
+                  <ReviewRow label="Recipient" value={receipt?.intent.recipient ?? recipient} mono />
+                  <ReviewRow label="Sponsor" value={(receipt?.quote ?? quoteResponse)?.quote.sponsorPrincipal ?? '—'} mono />
+                  <ReviewRow label="Status" value="Confirmed successfully" />
+                  <ReviewRow label="Transaction" valueNode={<TransactionId txid={txid} successful />} />
+                  <ReviewRow label="Block height" value={status.blockHeight?.toString() ?? '—'} mono />
+                </dl>
+                <Button size="lg" className="h-10 w-full" onClick={resetForNewQuote}><CheckCircle2 /> Done</Button>
+              </div>
+            ) : (
+              <>
+                <DialogHeader className="border-b px-12 py-5 text-center sm:text-center">
+                  <OutcomeTitle className="text-lg">Transaction submitted</OutcomeTitle>
+                  <OutcomeDescription id="transaction-modal-description">
+                    Your signed transaction is being confirmed on Stacks testnet.
+                  </OutcomeDescription>
+                </DialogHeader>
+
+                <div className="grid gap-5 px-5 py-2 sm:px-6">
+                  <div className="flex items-center justify-between rounded-lg border bg-primary/5 px-4 py-3">
+                    <div><p className="text-xs text-muted-foreground">Amount</p><p className="mt-1 font-mono text-xl font-semibold">{receipt?.intent.amountSats ?? amountSats} sats</p></div>
+                    <Badge>{provisionalStatus ? 'Rechecking status' : status?.status ?? 'Broadcast'}</Badge>
+                  </div>
+
+                  <dl className="grid gap-2 rounded-lg border bg-muted/30 p-4 text-sm">
+                    <ReviewRow label="Sponsor fee" value={(receipt?.quote ?? quoteResponse) ? `${(receipt?.quote ?? quoteResponse)!.quote.sponsorFee} sats` : '—'} />
+                    <ReviewRow label="Maximum outflow" value={receipt ? `${BigInt(receipt.intent.amountSats) + BigInt(receipt.quote.quote.sponsorFee)} sats` : totalSats ? `${totalSats} sats` : '—'} emphasized />
+                    <Separator className="my-1" />
+                    <ReviewRow label="To" value={compact(receipt?.intent.recipient ?? recipient, 10)} mono />
+                    <ReviewRow label="Sponsor" value={(receipt?.quote ?? quoteResponse) ? compact((receipt?.quote ?? quoteResponse)!.quote.sponsorPrincipal, 10) : '—'} mono />
+                    <ReviewRow label="Expires at block" value={(receipt?.quote ?? quoteResponse)?.quote.expiresAtBlock ?? '—'} mono />
+                    <ReviewRow label="Transaction" valueNode={<TransactionId txid={txid} successful={false} />} />
+                  </dl>
+
+                  <div className="grid place-items-center gap-3 py-3 text-center">
+                    {failed ? <CircleAlert className="size-10 text-destructive" /> : <Loader2 className="size-10 animate-spin text-primary" />}
+                    <div>
+                      <p className="font-medium">{failed ? 'Transaction failed' : provisionalStatus ? 'Rechecking chain status' : 'Waiting for confirmation'}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{describeChainStatus(status)}</p>
+                    </div>
+                  </div>
+
+                  {error ? <ErrorAlert error={error} /> : null}
+                  {failed ? <TransactionOutcome status={status} txid={txid} failed amountSats={receipt?.intent.amountSats ?? amountSats} sponsorFeeSats={(receipt?.quote ?? quoteResponse)?.quote.sponsorFee} origin={receipt?.intent.origin ?? origin} /> : null}
+                </div>
+
+                <DialogFooter className="m-0 px-5 py-4 sm:px-6">
+                  <Button variant="outline" size="lg" className="w-full" onClick={resetForNewQuote} disabled={Boolean(busy)}><RefreshCw /> New transfer</Button>
+                </DialogFooter>
+              </>
+            )}
+    </div>
+  );
+
+  const canQuote = Boolean(relayInfo?.quotesEnabled && relayInfo?.sponsorshipsEnabled && !relayUnavailable && !balanceUnavailable && origin && sbtcBalance?.address === origin && !Object.keys(fieldErrors).length && !insufficientBalance);
+  return (
+    <main className={embedded ? 'bg-background text-foreground' : 'min-h-screen bg-background text-foreground'}>
+      {process.env.NEXT_PUBLIC_OSSR_FIXTURE === 'true' ? <p role="note" className="bg-yellow-300 p-3 text-center font-bold text-black">MOCKED DEMO — fixture wallet and relay; no real funds or broadcast</p> : null}
+      <div className={embedded ? 'mx-auto flex w-full flex-col' : 'mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-5 sm:px-6 lg:px-8 lg:py-8'}>
+        {!embedded ? <header className="mb-8 flex flex-col gap-5 border-b border-border pb-6 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-semibold tracking-tight">Open Stacks Sponsor Relay</h1>
+                <Badge variant="secondary">Testnet</Badge>
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">Send sBTC without holding STX. The relay pays the network fee.</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={relayInfo ? 'default' : 'outline'} className="h-8 gap-1.5 px-3">
+              <Radio className="size-3.5" />
+              {relayUnavailable ? 'Relay offline' : relayInfo ? 'Relay online' : autoRelayChecked ? 'Relay offline' : 'Checking relay'}
+            </Badge>
+            {origin ? (
+              <div className="flex gap-2">
+                <Button variant="outline" size="lg" onClick={() => void connectWallet({ replaceCurrent: true })} disabled={Boolean(busy)}>
+                  {busy === 'wallet' ? <Loader2 className="animate-spin" /> : <Wallet />}
+                  Change wallet
+                </Button>
+                <Button variant="outline" size="lg" onClick={() => void disconnectWallet()} disabled={Boolean(busy)}>
+                  <LogOut />
+                  Disconnect
+                </Button>
+              </div>
+            ) : (
+              <Button size="lg" onClick={() => void connectWallet()} disabled={Boolean(busy)}>
+                {busy === 'wallet' ? <Loader2 className="animate-spin" /> : <Wallet />}
+                Connect wallet
+              </Button>
+            )}
+          </div>
+        </header> : null}
+
+        <div className={`${embedded ? 'w-full' : 'mx-auto w-full max-w-lg'}${embedded && sponsorship ? ' hidden' : ''}`}>
+          <Card size="sm" className={embedded ? 'w-full border-white/10 bg-card/45 shadow-none backdrop-blur-xl' : 'w-full'}>
+            <CardContent>
+              <form className={embedded ? 'grid gap-3' : 'grid gap-4'} onSubmit={event => { event.preventDefault(); void createQuote(); }}>
+                {relayInfo && !relayInfo.sponsorshipsEnabled ? <p role="status" className="text-sm text-muted-foreground">The operator paused new sponsorships. Existing receipts remain available.</p> : null}
+                {relayUnavailable ? <p role="status" className="text-sm text-destructive">Relay unavailable. Approval is disabled. Refresh the relay in Advanced or wait for automatic recovery.</p> : null}
+                {balanceUnavailable ? <p role="status" className="text-sm text-destructive">Balance lookup failed. Approval is disabled until a fresh balance is available; checking again automatically.</p> : null}
+                {quoteResponse && !sponsorship ? <p role="status" className="text-xs text-muted-foreground">{quoteHeightUnavailable || quoteTipHeight === undefined ? 'Quote countdown unavailable. A fresh chain height is required before signing or submission.' : BigInt(quoteResponse.quote.expiresAtBlock) <= BigInt(quoteTipHeight) ? 'Quote expired. Your transfer form is preserved; request a fresh quote.' : `Quote expires in ${(BigInt(quoteResponse.quote.expiresAtBlock) - BigInt(quoteTipHeight)).toString()} blocks (block ${quoteResponse.quote.expiresAtBlock}).`}</p> : null}
+                <Tabs defaultValue="transfer" className={embedded ? 'gap-3' : 'gap-4'}>
+                  {embedded ? (
+                    <div className="relative flex items-center">
+                      <h2 className="text-lg font-semibold tracking-tight">Transfer</h2>
+                      <Badge variant="secondary" className="absolute left-1/2 -translate-x-1/2">Testnet</Badge>
+                    </div>
+                  ) : <TabsList className="grid w-full grid-cols-2">
+                    <TabsTrigger value="transfer" className="cursor-pointer">Transfer</TabsTrigger>
+                    <TabsTrigger value="advanced" className="cursor-pointer">Advanced</TabsTrigger>
+                  </TabsList>}
+
+                  <TabsContent value="transfer" className={embedded ? 'grid gap-3' : 'grid gap-4'}>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="grid gap-2 sm:col-span-2">
+                        <div className="flex items-center justify-between">
+                          <Label htmlFor="amount">Amount</Label>
+                        </div>
+                        <div className="relative">
+                          <div className="flex h-16 items-center overflow-hidden rounded-xl border bg-background">
+                            <Input id="amount" aria-invalid={Boolean(amountSats && fieldErrors.amountSats)} aria-describedby={amountSats && fieldErrors.amountSats ? 'error-amountSats' : undefined} value={amountSats} onChange={event => setAmountSats(event.target.value)} inputMode="numeric" autoComplete="off" placeholder="0" className={`h-full flex-1 border-0 bg-transparent text-3xl dark:bg-transparent md:text-3xl ${embedded ? 'focus-visible:border-input focus-visible:ring-0' : ''}`} />
+                            <button type="button" onClick={() => setShowAssetMenu(value => !value)} className="flex items-center gap-2 border-l bg-muted/30 px-3 text-sm font-medium text-foreground hover:bg-muted/50">
+                              <span className="flex size-6 items-center justify-center overflow-hidden rounded-full">
+                                {asset.logoImage ? <img src={asset.logoImage} alt={asset.label} className="size-6 rounded-full object-cover" /> : <span className={`flex size-6 items-center justify-center rounded-full text-[10px] font-black ${asset.logoClass}`}>{asset.logo}</span>}
+                              </span>
+                              <span>{asset.label}</span>
+                              <ChevronDown className="size-4 text-muted-foreground" />
+                            </button>
+                          </div>
+                          {showAssetMenu ? (
+                            <div className="absolute right-0 z-20 mt-2 w-52 overflow-hidden rounded-lg border bg-popover shadow-lg">
+                              {assetOptions.map(option => (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  onClick={() => {
+                                    setAssetId(option.value);
+                                    setShowAssetMenu(false);
+                                  }}
+                                  className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition hover:bg-muted ${assetId === option.value ? 'bg-muted' : ''}`}
+                                >
+                                  <span className="flex size-8 items-center justify-center overflow-hidden rounded-full">
+                                    {option.logoImage ? <img src={option.logoImage} alt={option.label} className="size-8 rounded-full object-cover" /> : <span className={`flex size-8 items-center justify-center rounded-full text-xs font-black ${option.logoClass}`}>{option.logo}</span>}
+                                  </span>
+                                  <span className="font-medium">{option.label}</span>
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 grid grid-cols-4 gap-2">
+                          {[25, 50, 75, 100].map(percent => (
+                            <Button
+                              key={percent}
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 px-2 text-xs"
+                              onClick={() => setAmountByPercent(percent)}
+                              disabled={!sbtcBalance || !/^\d+$/.test(sbtcBalance.balanceSats)}
+                            >
+                              {percent}%
+                            </Button>
+                          ))}
+                        </div>
+                        <div className="grid grid-cols-2 gap-4 px-1 text-sm">
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground" title={`Pricing refreshes every ${quoteRefreshSeconds} seconds`}>Fee</span>
+                            <span className="font-medium">{defaultSponsorFeeSats} {asset.unitLabel}</span>
+                          </div>
+                          <div className="flex items-center justify-between border-l border-border pl-4">
+                            <span className="text-muted-foreground">Balance</span>
+                            <span className="font-medium">{balanceUnavailable ? sbtcBalance ? `${sbtcBalance.balanceSats} ${asset.unitLabel} (stale — refresh unavailable)` : 'Unavailable' : sbtcBalance ? `${sbtcBalance.balanceSats} ${asset.unitLabel}` : origin ? 'Loading' : '—'}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div ref={recipientComboboxPortalRef} className="grid gap-2 sm:col-span-2 [container-type:inline-size]">
+                        <Label htmlFor="recipient" className="justify-self-center">To</Label>
+                        <Combobox
+                          items={recentRecipients}
+                          value={recipient || null}
+                          inputValue={recipient}
+                          onInputValueChange={value => setRecipient(value.trim())}
+                          onValueChange={value => setRecipient(value ?? '')}
+                        >
+                          <ComboboxInput
+                            id="recipient"
+                            aria-invalid={Boolean(recipient && fieldErrors.recipient)}
+                            aria-describedby={recipient && fieldErrors.recipient ? 'error-recipient' : undefined}
+                            placeholder="ST…"
+                            spellCheck={false}
+                            autoCapitalize="characters"
+                            autoComplete="off"
+                            showClear={Boolean(recipient)}
+                            className="h-16 bg-transparent dark:bg-transparent has-[[data-slot=input-group-control]:focus-visible]:border-input has-[[data-slot=input-group-control]:focus-visible]:ring-0 [&_input]:font-mono [&_input]:!text-[clamp(0.6875rem,3.7cqw,1rem)] [&_input]:tracking-[-0.02em]"
+                          />
+                          <ComboboxContent portalContainer={recipientComboboxPortalRef}>
+                            <ComboboxEmpty>No saved addresses</ComboboxEmpty>
+                            <ComboboxList>
+                              {recentRecipients.map(address => (
+                                <ComboboxItem key={address} value={address} className="min-h-10 font-mono text-xs">
+                                  <span className="truncate">{address}</span>
+                                </ComboboxItem>
+                              ))}
+                            </ComboboxList>
+                          </ComboboxContent>
+                        </Combobox>
+                      </div>
+                      <Accordion type="single" collapsible className="sm:col-span-2">
+                        <AccordionItem value="memo" className="rounded-lg border px-3">
+                          <AccordionTrigger className="m-1 cursor-pointer py-3 text-sm">Add memo</AccordionTrigger>
+                          <AccordionContent className="px-1 pt-1 pb-3">
+                            <div className="grid gap-2">
+                              <Label htmlFor="memo">Memo text <span className="font-normal text-muted-foreground">(optional)</span></Label>
+                              <Input id="memo" aria-describedby="memo-help" aria-invalid={memoByteLength > 34} value={memo} onChange={event => setMemo(event.target.value)} placeholder="Add a short message…" autoComplete="off" className={`bg-transparent dark:bg-transparent ${embedded ? 'focus-visible:border-input focus-visible:ring-0' : ''}`} />
+                              <p id="memo-help" className={memoByteLength > 34 ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'}>{memoByteLength}/34 bytes · converted to hex automatically</p>
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      </Accordion>
+                    </div>
+
+                    {insufficientBalance ? (
+                      <Alert variant="destructive"><CircleAlert /><AlertTitle>Insufficient {asset.label} balance</AlertTitle><AlertDescription>This transfer requires {estimatedTotalSats?.toString()} {asset.unitLabel} including the {defaultSponsorFeeSats} {asset.unitLabel} sponsor fee, but the wallet has {sbtcBalance?.balanceSats ?? '0'} {asset.unitLabel}.</AlertDescription></Alert>
+                    ) : null}
+                  </TabsContent>
+
+                  {!embedded ? <TabsContent value="advanced">
+                    <div className="grid gap-2 rounded-lg border p-4">
+                      <Label htmlFor="relay-url">Relay endpoint</Label>
+                      <div className="flex gap-2">
+                        <Input id="relay-url" value={relayUrl} onChange={event => setRelayUrl(event.target.value)} className="font-mono text-xs" />
+                        <Button type="button" variant="outline" onClick={loadRelay} disabled={Boolean(busy)}>
+                          {busy === 'relay' ? <Loader2 className="animate-spin" /> : <RefreshCw />} Refresh
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">Change this only when connecting to a custom OSSR operator.</p>
+                      <Label htmlFor="relay-access">Invited beta access credential (optional)</Label>
+                      <Input id="relay-access" type="password" autoComplete="off" value={accessToken} onChange={event => { setAccessToken(event.target.value); setRelayAccessToken(relayUrl, event.target.value); }} aria-describedby="relay-access-help" />
+                      <p id="relay-access-help" className="text-xs text-muted-foreground">Use the credential issued for your connected wallet and this relay. Kept only in memory; enter it again after refresh. Never enter a wallet seed phrase or private key.</p>
+                    </div>
+                  </TabsContent> : null}
+                </Tabs>
+
+                {embedded && !origin ? (
+                  <Button size="lg" type="button" onClick={() => void connectWallet()} disabled={Boolean(busy)} className="h-18 w-full text-lg">
+                    {busy === 'wallet' ? <Loader2 className="animate-spin" /> : <Wallet />}
+                    {busy === 'wallet' ? 'Connecting wallet…' : 'Connect wallet'}
+                  </Button>
+                ) : (
+                  <Button size="lg" type="submit" disabled={!canQuote || Boolean(busy)} className="h-18 w-full text-lg">
+                    {busy === 'quote' || busy === 'submit' ? <Loader2 className="animate-spin" /> : <ArrowRight />}
+                    {busy === 'quote' ? 'Verifying quote…' : busy === 'submit' ? 'Waiting for wallet…' : 'Sign in wallet'}
+                  </Button>
+                )}
+                <Button type="button" variant="outline" onClick={() => void requestTestnetSbtc()} disabled={!origin || Boolean(busy)}>
+                  {busy === 'faucet' ? <Loader2 className="animate-spin" /> : <Wallet />}
+                  {busy === 'faucet' ? 'Requesting testnet sBTC…' : 'Request Testnet sBTC'}
+                </Button>
+                <p className="text-center text-xs text-muted-foreground">Sign with your wallet to receive 10 sats. Once every 24 hours.</p>
+                {faucetTxid ? <p role="status" className="text-center text-xs">10-sat request submitted. Awaiting confirmation. <TransactionId txid={faucetTxid} successful={false} /></p> : null}
+                {Object.entries(fieldErrors).filter(([field]) => currentIntent[field as keyof TransferIntent]).map(([field, message]) => <p key={field} id={`error-${field}`} role="alert" className="text-sm text-destructive">{field}: {message}</p>)}
+                {receipt ? <div className="grid gap-2 rounded-lg border p-4"><p>Submitted transfer: {receipt.intent.amountSats} sats · {status?.status ?? 'Broadcast'}</p><TransactionId txid={txid} successful={false} /><Button type="button" variant="outline" onClick={() => setTransactionModalOpen(true)}>View submitted transfer</Button></div> : null}
+              </form>
+            </CardContent>
+          </Card>
+
+        </div>
+
+        {embedded ? (sponsorship ? transactionContent : null) : (
+          <Dialog open={transactionModalOpen} onOpenChange={setTransactionModalOpen}>
+            <DialogContent className="max-h-[90vh] overflow-y-auto p-0 sm:max-w-xl" aria-describedby="transaction-modal-description">
+              {transactionContent}
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {error && !(embedded && sponsorship) ? (
+          <ErrorAlert error={error} className="mt-6" />
+        ) : null}
+
+        {!embedded ? <section className="relative mt-8 hidden border-t py-3 sm:block" aria-label="Transfer status">
+          <div className="mx-auto grid w-full max-w-7xl gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <StatusRow icon={<Radio />} label="Relay" value={relayInfo?.relayId ?? (autoRelayChecked ? 'Unavailable — retry shortly' : 'Checking relay')} ok={Boolean(relayInfo)} />
+            <StatusRow icon={<Wallet />} label="Wallet" value={origin ? compact(origin) : 'Not connected'} ok={Boolean(origin)} />
+            <StatusRow icon={<CheckCircle2 />} label="Balance" value={balanceUnavailable ? sbtcBalance ? `${sbtcBalance.balanceSats} sats (stale — refresh unavailable)` : 'Unavailable' : sbtcBalance ? `${sbtcBalance.balanceSats} sats` : origin ? 'Loading' : '—'} ok={Boolean(sbtcBalance)} />
+            <StatusRow icon={<CheckCircle2 />} label="Quote" value={quoteResponse ? `${quoteResponse.quote.sponsorFee} sats` : 'Not requested'} ok={Boolean(quoteResponse)} />
+            <StatusRow icon={<Send />} label="Transaction" value={provisionalStatus ? 'Rechecking status' : status?.status ?? sponsorship?.status ?? 'Not submitted'} ok={Boolean(sponsorship) && !failed} />
+          </div>
+        </section> : null}
+
+        {!embedded ? <footer className="mt-8 flex flex-col gap-2 border-t border-border pt-5 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+          <span>OSSR v0.1 prototype · Testnet only · Do not use mainnet funds</span>
+          <span>The relay pays STX. You authorize only the reviewed sBTC outflow.</span>
+        </footer> : null}
+      </div>
+    </main>
+  );
+}
+
+function ErrorAlert({ error, className }: { error: DisplayError; className?: string }) {
+  const normalize = (value: string) => value.toLowerCase().replace(/^(this|the)\s+/, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  const showMessage = normalize(error.message) !== normalize(error.title);
+  return (
+    <Alert variant="destructive" className={className} aria-live="polite">
+      <CircleAlert />
+      <AlertTitle>{error.title}</AlertTitle>
+      <AlertDescription className="grid gap-1.5">
+        {showMessage ? <span>{error.message}</span> : null}
+        {error.action ? <span className="font-medium">What to do: {error.action}</span> : null}
+        {error.code ? <span className="font-mono text-[11px] text-foreground">{error.code}</span> : null}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+function TransactionOutcome({
+  status,
+  txid,
+  failed,
+  amountSats,
+  sponsorFeeSats,
+  origin,
+}: {
+  status?: SponsorshipStatus;
+  txid?: string;
+  failed: boolean;
+  amountSats?: string;
+  sponsorFeeSats?: string;
+  origin?: string;
+}) {
+  const raw = status?.raw ? JSON.stringify(status.raw, null, 2) : undefined;
+  const cause = likelyFailureCause(status, { amountSats, sponsorFeeSats, origin });
+  const adapterError = adapterErrorFromStatus(status);
+  const requiredSats = amountSats && sponsorFeeSats && /^\d+$/.test(amountSats) && /^\d+$/.test(sponsorFeeSats)
+    ? (BigInt(amountSats) + BigInt(sponsorFeeSats)).toString()
+    : undefined;
+  return (
+    <Alert variant={failed ? 'destructive' : 'default'} className={failed ? '' : 'border-primary/20 bg-primary/5'}>
+      {failed ? <CircleAlert /> : <CheckCircle2 className="text-primary" />}
+      <AlertTitle className="font-mono">{status?.status ?? 'BROADCAST'}</AlertTitle>
+      <AlertDescription className="grid gap-3">
+        <p>{describeChainStatus(status)}</p>
+        <dl className="grid gap-2 text-xs">
+          <ReviewRow label="Txid" valueNode={<TransactionId txid={txid} successful={status?.status === 'success'} />} />
+          <ReviewRow label="Block height" value={status?.blockHeight?.toString() ?? '—'} mono />
+          {adapterError ? <ReviewRow label="Adapter error" value={`${adapterError.name} (u${adapterError.code})`} mono /> : null}
+          {requiredSats ? <ReviewRow label="Required sBTC" value={`${requiredSats} sats`} mono /> : null}
+          {cause ? <ReviewRow label="Likely cause" value={cause} /> : null}
+        </dl>
+        {raw ? <details><summary className="cursor-pointer text-xs font-medium">Technical details</summary><pre className="mt-2 max-h-56 overflow-auto rounded-lg border bg-background p-3 font-mono text-[11px] text-foreground">{raw}</pre></details> : null}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+function TransactionId({ txid, successful }: { txid?: string; successful: boolean }) {
+  if (!txid) return '-';
+  void successful;
+  return (
+    <a className="inline-flex items-center gap-1 font-mono text-primary underline-offset-4 hover:underline" href={hiroTxUrl(txid)} target="_blank" rel="noreferrer">
+      {compact(txid, 12)} <ExternalLink className="size-3" />
+    </a>
+  );
+}
+
+function hiroTxUrl(txid: string): string {
+  const normalized = txid.startsWith('0x') ? txid : `0x${txid}`;
+  return `https://explorer.hiro.so/txid/${normalized}?chain=testnet`;
+}
+
+function StatusRow({ icon, label, value, ok }: { icon: React.ReactNode; label: string; value: string; ok: boolean }) {
+  return (
+    <div className="flex min-w-0 items-center gap-3 rounded-xl border bg-card px-3 py-3 shadow-xs">
+      <span className={ok ? 'text-primary [&_svg]:size-4' : 'text-muted-foreground [&_svg]:size-4'}>{icon}</span>
+      <div className="min-w-0">
+        <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+        <p className="truncate text-xs font-medium">{value}</p>
+      </div>
+    </div>
+  );
+}
+
+function ReviewRow({ label, value, valueNode, mono = false, emphasized = false }: {
+  label: string;
+  value?: string;
+  valueNode?: React.ReactNode;
+  mono?: boolean;
+  emphasized?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] items-start gap-4 py-1">
+      <dt className="text-right text-muted-foreground">{label}</dt>
+      <dd className={`${mono ? 'font-mono text-xs' : ''} ${emphasized ? 'font-semibold text-foreground' : ''} min-w-0 [overflow-wrap:anywhere] text-left`}>
+        {valueNode ?? value ?? '—'}
+      </dd>
+    </div>
+  );
+}
+
+async function signPreparedTransactionWithCompatibleWallet(
+  prepared: ReturnType<typeof prepareWalletContractCall>,
+  origin: string,
+  beforeApproval: () => Promise<void>,
+) {
+  const publicKey = window.localStorage.getItem(connectedWalletPublicKeyKey);
+  if (!publicKey) {
+    throw new Error('This wallet connection predates sponsored signing. Disconnect and reconnect the wallet, then try again.');
+  }
+  const transaction = await prepareUnsignedSponsoredTransaction({
+    call: prepared,
+    origin,
+    publicKey,
+  });
+  const { request } = await import('@stacks/connect');
+  await beforeApproval();
+  return request('stx_signTransaction', { transaction, broadcast: false });
+}
+
+function compact(value: string, edge = 8): string {
+  return value.length > edge * 2 + 1 ? `${value.slice(0, edge)}…${value.slice(-edge)}` : value;
+}
+
+function normalizeMemo(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  return `0x${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { connectTestnetWallet } from '@/lib/connect-wallet';
 import { prefetchSbtcBalance } from '@/lib/sbtc-balance';
 import { connectedWalletPublicKeyKey, requireTestnetStacksAccount } from '@/lib/stacks-wallet';
-import Dashboard from './dashboard/page';
+import { Dashboard } from './dashboard/dashboard-client';
 import styles from './page.module.css';
 import { nostrProfileUrl } from '@/lib/social';
 
