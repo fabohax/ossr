@@ -31,7 +31,7 @@ Example values:
 
 ```bash
 OSSR_RELAY_URL=http://127.0.0.1:3002
-STACKS_FOLLOWER_URL=http://127.0.0.1:20443
+STACKS_FOLLOWER_URL=http://127.0.0.1:20453
 STACKS_REFERENCE_URL=https://api.testnet.hiro.so
 ```
 
@@ -39,7 +39,7 @@ If you are running the app without a `.env.local` file, use the defaults below w
 
 ```text
 Relay:           http://127.0.0.1:3002
-Stacks follower: http://127.0.0.1:20443
+Stacks follower: http://127.0.0.1:20453
 Reference node:  https://api.testnet.hiro.so
 ```
 

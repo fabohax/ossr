@@ -1,6 +1,6 @@
 [package]
 name = "ossr-operator-desktop"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Linux desktop dashboard for the OSSR relay operator"
 license = "MIT"

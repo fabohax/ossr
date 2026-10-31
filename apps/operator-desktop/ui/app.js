@@ -1,14 +1,17 @@
 const invoke = window.__TAURI__?.core?.invoke;
 const $ = (id) => document.getElementById(id);
+const defaultNodeUrl = 'http://127.0.0.1:20453';
+const savedNodeUrl = localStorage.getItem('nodeUrl');
 const config = {
   relayUrl: localStorage.getItem('relayUrl') || 'http://127.0.0.1:3002',
-  nodeUrl: localStorage.getItem('nodeUrl') || 'http://127.0.0.1:20443',
+  nodeUrl: savedNodeUrl && savedNodeUrl !== 'http://127.0.0.1:20443' ? savedNodeUrl : defaultNodeUrl,
   referenceUrl: localStorage.getItem('referenceUrl') || 'https://api.testnet.hiro.so',
 };
 let serviceState;
 let activity = null;
 let activeView = 'overview';
 let activityLoading = false;
+let refreshing = false;
 
 function renderActivity() {
   const body = $('activity-rows'); body.replaceChildren();
@@ -91,6 +94,7 @@ function setNotice(message) { $('notice').textContent=message; $('notice').class
 
 function render(snapshot) {
   const good=snapshot.overall==='healthy'; const relayGood=snapshot.relay.live.reachable; const ready=snapshot.relay.ready.reachable;
+  $('retry-check').classList.toggle('hidden', good);
   $('overall-pill').className=`pill ${good?'good':snapshot.overall==='degraded'?'warn':'bad'}`;
   $('overall-pill').innerHTML=`<i class="dot ${good?'green':''}"></i>${snapshot.overall.toUpperCase()}`;
   value('last-updated',`Updated ${new Date(snapshot.checkedAt).toLocaleTimeString()}`);
@@ -109,7 +113,10 @@ function render(snapshot) {
 
 async function refresh() {
   if (activeView === 'activity') return refreshActivity();
+  if (refreshing) return;
+  refreshing = true;
   $('refresh').classList.add('spin'); setNotice('');
+  $('retry-check').disabled = true;
   try {
     if (!invoke) throw new Error('Run this interface through the Tauri desktop application.');
     const snapshot = await invoke('get_snapshot',{relayUrl:config.relayUrl,nodeUrl:config.nodeUrl,referenceUrl:config.referenceUrl});
@@ -117,10 +124,11 @@ async function refresh() {
     renderDiagnostics(snapshot);
     await refreshServices();
   } catch(error) { $('diagnostics-checks').replaceChildren(); value('diagnostics-summary', 'Checks failed. Verify endpoint configuration and refresh.'); setNotice(String(error)); $('overall-pill').className='pill bad'; $('overall-pill').textContent='CHECK FAILED'; }
-  finally { $('refresh').classList.remove('spin'); }
+  finally { refreshing = false; $('refresh').classList.remove('spin'); $('retry-check').disabled = false; }
 }
 async function refreshServices(){ serviceState=await invoke('get_autostart_status'); value('relay-service',serviceState.relay.state); value('dashboard-service',serviceState.dashboard.state); $('autostart').disabled=!serviceState.relay.installed||!serviceState.dashboard.installed; $('autostart').checked=serviceState.relay.enabled&&serviceState.dashboard.enabled; $('toggle-relay').disabled=!serviceState.relay.installed; $('toggle-relay').textContent=serviceState.relay.active?'Stop relay':'Start relay'; }
 $('refresh').addEventListener('click',refresh);
+$('retry-check').addEventListener('click',refresh);
 $('install').addEventListener('click',()=>{ $('relay-directory').value=localStorage.getItem('relayDirectory')||''; $('install-dialog').showModal(); });
 $('confirm-install').addEventListener('click',async(event)=>{ event.preventDefault(); const relayDirectory=$('relay-directory').value.trim(); try{ serviceState=await invoke('install_autostart',{relayDirectory});localStorage.setItem('relayDirectory',relayDirectory);$('install-dialog').close();await refreshServices();setNotice('');}catch(error){setNotice(String(error));$('install-dialog').close();} });
 $('autostart').addEventListener('change',async(event)=>{try{await invoke('set_autostart',{enabled:event.target.checked});await refreshServices();}catch(error){setNotice(String(error));await refreshServices();}});
