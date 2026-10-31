@@ -15,10 +15,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { connectTestnetWallet } from '@/lib/connect-wallet';
+import { connectStacksWallet } from '@/lib/connect-wallet';
 import { assetConfig, assetOptions, type AssetId } from '@/lib/asset-selection';
 import { cachedSbtcBalance, defaultSbtcContract, fetchDisplaySbtcBalance } from '@/lib/sbtc-balance';
-import { approvedWalletProviderIds, connectedWalletPublicKeyKey, readCachedStacksAccount, requireTestnetStacksAccount } from '@/lib/stacks-wallet';
+import { approvedWalletProviderIds, connectedWalletPublicKeyKey, readCachedStacksAccount, requireStacksAccount } from '@/lib/stacks-wallet';
 import { configuredQuoteTrust, validateIntent, verifyQuote, type TransferIntent } from '@/lib/quote-verification';
 import {
   validateSignedWalletTransaction,
@@ -45,6 +45,7 @@ import {
   type SponsorshipResponse,
   type SponsorshipStatus,
 } from '../../lib/ossr';
+import { explorerChain, isAddressForNetwork, stacksNetwork, stacksNetworkLabel } from '@/lib/network';
 
 const connectedAddressKey = 'ossr-ui:connected-stx-address';
 const recentRecipientsKey = 'ossr-ui:recent-recipients';
@@ -112,12 +113,12 @@ const errorGuidance: Record<string, Pick<DisplayError, 'title' | 'action'>> = {
   BETA_ACCOUNTING_MISMATCH: { title: 'Operator accounting needs reconciliation', action: 'Save the explorer link and contact the operator. Do not resubmit this payment.' },
   BETA_ACCESS_REQUIRED: { title: 'Beta access required', action: 'Enter your invited-wallet credential in Advanced, then request a fresh quote.' },
   BETA_ORIGIN_MISMATCH: { title: 'Beta credential belongs to another wallet', action: 'Connect the invited wallet or enter its credential in Advanced.' },
-  WALLET_NOT_ALLOWED: { title: 'Wallet is not invited', action: 'Contact the operator for testnet beta access.' },
+  WALLET_NOT_ALLOWED: { title: 'Wallet is not invited', action: 'Contact the operator for beta access.' },
   RATE_LIMITED: { title: 'Too many requests', action: 'Wait until the next minute and request a fresh quote. Check an existing receipt before retrying submission.' },
   SIMULATION_UNAVAILABLE: { title: 'Simulation unavailable', action: 'No broadcast was approved. Wait and request a fresh quote.' },
   SIMULATION_STALE: { title: 'Simulation is stale', action: 'No broadcast was approved. Request a fresh quote later.' },
   SIMULATION_INVALID_RESPONSE: { title: 'Simulation could not be verified', action: 'No broadcast was approved. Wait for the relay to recover.' },
-  INSUFFICIENT_STX: { title: 'Sponsor needs testnet STX', action: 'The operator must fund the sponsor before you request a new quote.' },
+  INSUFFICIENT_STX: { title: 'Sponsor needs more STX', action: 'The operator must fund the sponsor before you request a new quote.' },
   BROADCAST_FAILED: { title: 'Broadcast failed', action: 'Check relay status and the explorer before attempting another transfer.' },
   QUOTE_EXPIRED: { title: 'This quote has expired', action: 'Go back and request a fresh quote, then approve it promptly.' },
   QUOTE_ALREADY_USED: { title: 'This quote was already used', action: 'Check the existing transaction before starting another transfer.' },
@@ -127,12 +128,12 @@ const errorGuidance: Record<string, Pick<DisplayError, 'title' | 'action'>> = {
   ORIGIN_MISMATCH: { title: 'The signing wallet does not match', action: 'Reconnect the wallet shown in the transfer details and try again.' },
   INVALID_ORIGIN_SIGNATURE: { title: 'The wallet signature could not be verified', action: 'Reject any pending wallet request, then approve the transaction again.' },
   SPONSOR_FEE_TOO_HIGH: { title: 'The sponsor fee is above your limit', action: 'Go back, request a new quote, and review the updated fee.' },
-  SIMULATION_FAILED: { title: 'The transaction would fail on-chain', action: 'Check that your wallet has enough testnet sBTC for the amount and sponsor fee, then request a new quote.' },
+  SIMULATION_FAILED: { title: 'The transaction would fail on-chain', action: `Check that your wallet has enough ${stacksNetwork} sBTC for the amount and sponsor fee, then request a new quote.` },
   INVALID_POST_CONDITIONS: { title: 'The wallet changed the transfer safeguards', action: 'Try again with a wallet that supports the exact post-conditions shown in this review.' },
   QUOTE_TRANSACTION_MISMATCH: { title: 'The signed transaction does not match this quote', action: 'Go back and request a new quote before signing again.' },
-  WRONG_NETWORK: { title: 'Your wallet is on the wrong network', action: 'Switch the wallet to Stacks testnet and try again.' },
+  WRONG_NETWORK: { title: 'Your wallet is on the wrong network', action: `Switch the wallet to ${stacksNetworkLabel} and try again.` },
   UNSUPPORTED_AUTH: { title: 'The wallet did not create a sponsored transaction', action: 'Use a wallet that supports sponsored Stacks contract calls.' },
-  FEE_OUT_OF_POLICY: { title: 'The network fee is outside relay limits', action: 'Request a new quote later, when testnet fees have changed.' },
+  FEE_OUT_OF_POLICY: { title: 'The network fee is outside relay limits', action: `Request a new quote later, when ${stacksNetwork} fees have changed.` },
 };
 
 function displayError(error: unknown): DisplayError {
@@ -252,6 +253,7 @@ export function Dashboard({ embedded = false, onWalletChange }: { embedded?: boo
   async function loadRelayInfo({ quiet = false }: { quiet?: boolean } = {}) {
     try {
       const info = await fetchRelayInfo(relayUrl);
+      if (info.network !== stacksNetwork) throw new Error(`This relay serves ${info.network}; this UI is configured for ${stacksNetwork}.`);
       setRelayInfo(info); setRelayUnavailable(false);
       if (!quiet) setError(undefined);
       return info;
@@ -291,7 +293,7 @@ export function Dashboard({ embedded = false, onWalletChange }: { embedded?: boo
         // address request here, or each approval can trigger another prompt.
         const account = readCachedStacksAccount(getLocalStorage(), window.localStorage.getItem(connectedAddressKey) ?? undefined);
         if (!cancelled) {
-          const address = account?.address && /^(ST|SN)/.test(account.address) ? account.address : '';
+          const address = account?.address && isAddressForNetwork(account.address) ? account.address : '';
           setOrigin(address);
           if (window.localStorage.getItem(connectedAddressKey) !== address) {
             window.localStorage.removeItem(connectedWalletPublicKeyKey);
@@ -331,6 +333,7 @@ export function Dashboard({ embedded = false, onWalletChange }: { embedded?: boo
       try {
         const info = await fetchRelayInfo(relayUrl);
         if (cancelled) return;
+        if (info.network !== stacksNetwork) throw new Error(`This relay serves ${info.network}; this UI is configured for ${stacksNetwork}.`);
         setRelayInfo(info); setRelayUnavailable(false);
       } catch {
         if (!cancelled) { setRelayInfo(undefined); setRelayUnavailable(true); }
@@ -352,6 +355,7 @@ export function Dashboard({ embedded = false, onWalletChange }: { embedded?: boo
     const refreshPricing = async () => {
       try {
         const info = await fetchRelayInfo(relayUrl);
+        if (info.network !== stacksNetwork) throw new Error(`This relay serves ${info.network}; this UI is configured for ${stacksNetwork}.`);
         if (!cancelled) { setRelayInfo(info); setRelayUnavailable(false); }
       } catch {
         if (!cancelled) setRelayUnavailable(true);
@@ -495,8 +499,8 @@ export function Dashboard({ embedded = false, onWalletChange }: { embedded?: boo
         disconnect();
         clearConnectedWalletState();
       }
-      const response = await connectTestnetWallet();
-      const account = requireTestnetStacksAccount(response);
+      const response = await connectStacksWallet();
+      const account = requireStacksAccount(response);
       setOrigin(account.address);
       window.localStorage.setItem(connectedAddressKey, account.address);
       if (account.publicKey) window.localStorage.setItem(connectedWalletPublicKeyKey, account.publicKey);
@@ -633,7 +637,7 @@ export function Dashboard({ embedded = false, onWalletChange }: { embedded?: boo
                 </div>
                 <DialogHeader className="items-center">
                   <OutcomeTitle className="text-2xl">Transaction successful</OutcomeTitle>
-                  <OutcomeDescription id="transaction-modal-description">Your sponsored sBTC transfer has confirmed on Stacks testnet.</OutcomeDescription>
+                  <OutcomeDescription id="transaction-modal-description">Your sponsored sBTC transfer has confirmed on {stacksNetworkLabel}.</OutcomeDescription>
                 </DialogHeader>
                 <dl className="w-full rounded-lg border bg-muted/30 p-4 text-sm">
                   <ReviewRow label="Amount" value={`${receipt?.intent.amountSats ?? amountSats} sats`} emphasized />
@@ -651,7 +655,7 @@ export function Dashboard({ embedded = false, onWalletChange }: { embedded?: boo
                 <DialogHeader className="border-b px-12 py-5 text-center sm:text-center">
                   <OutcomeTitle className="text-lg">Transaction submitted</OutcomeTitle>
                   <OutcomeDescription id="transaction-modal-description">
-                    Your signed transaction is being confirmed on Stacks testnet.
+                    Your signed transaction is being confirmed on {stacksNetworkLabel}.
                   </OutcomeDescription>
                 </DialogHeader>
 
@@ -701,7 +705,7 @@ export function Dashboard({ embedded = false, onWalletChange }: { embedded?: boo
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-xl font-semibold tracking-tight">Open Stacks Sponsor Relay</h1>
-                <Badge variant="secondary">Testnet</Badge>
+                <Badge variant="secondary">{stacksNetwork === 'mainnet' ? 'Mainnet' : 'Testnet'}</Badge>
               </div>
               <p className="mt-1 text-sm text-muted-foreground">Send sBTC without holding STX. The relay pays the network fee.</p>
             </div>
@@ -743,7 +747,7 @@ export function Dashboard({ embedded = false, onWalletChange }: { embedded?: boo
                   {embedded ? (
                     <div className="relative flex items-center">
                       <h2 className="text-lg font-semibold tracking-tight">Transfer</h2>
-                      <Badge variant="secondary" className="absolute left-1/2 -translate-x-1/2">Testnet</Badge>
+                      <Badge variant="secondary" className="absolute left-1/2 -translate-x-1/2">{stacksNetwork === 'mainnet' ? 'Mainnet' : 'Testnet'}</Badge>
                     </div>
                   ) : <TabsList className="grid w-full grid-cols-2">
                     <TabsTrigger value="transfer" className="cursor-pointer">Transfer</TabsTrigger>
@@ -769,7 +773,7 @@ export function Dashboard({ embedded = false, onWalletChange }: { embedded?: boo
                           </div>
                           {showAssetMenu ? (
                             <div className="absolute right-0 z-20 mt-2 w-52 overflow-hidden rounded-lg border bg-popover shadow-lg">
-                              {assetOptions.map(option => (
+                              {assetOptions.filter(option => stacksNetwork !== 'mainnet' || option.value === 'sbtc').map(option => (
                                 <button
                                   key={option.value}
                                   type="button"
@@ -893,11 +897,11 @@ export function Dashboard({ embedded = false, onWalletChange }: { embedded?: boo
                     {busy === 'quote' ? 'Verifying quote…' : busy === 'submit' ? 'Waiting for wallet…' : 'Sign in wallet'}
                   </Button>
                 )}
-                <Button type="button" variant="outline" onClick={() => void requestTestnetSbtc()} disabled={!origin || Boolean(busy)}>
+                {stacksNetwork === 'testnet' ? <Button type="button" variant="outline" onClick={() => void requestTestnetSbtc()} disabled={!origin || Boolean(busy)}>
                   {busy === 'faucet' ? <Loader2 className="animate-spin" /> : <Wallet />}
                   {busy === 'faucet' ? 'Requesting testnet sBTC…' : 'Request Testnet sBTC'}
-                </Button>
-                <p className="text-center text-xs text-muted-foreground">Sign with your wallet to receive 10 sats. Once every 24 hours.</p>
+                </Button> : null}
+                {stacksNetwork === 'testnet' ? <p className="text-center text-xs text-muted-foreground">Sign with your wallet to receive 10 sats. Once every 24 hours.</p> : null}
                 {faucetTxid ? <p role="status" className="text-center text-xs">10-sat request submitted. Awaiting confirmation. <TransactionId txid={faucetTxid} successful={false} /></p> : null}
                 {Object.entries(fieldErrors).filter(([field]) => currentIntent[field as keyof TransferIntent]).map(([field, message]) => <p key={field} id={`error-${field}`} role="alert" className="text-sm text-destructive">{field}: {message}</p>)}
                 {receipt ? <div className="grid gap-2 rounded-lg border p-4"><p>Submitted transfer: {receipt.intent.amountSats} sats · {status?.status ?? 'Broadcast'}</p><TransactionId txid={txid} successful={false} /><Button type="button" variant="outline" onClick={() => setTransactionModalOpen(true)}>View submitted transfer</Button></div> : null}
@@ -930,7 +934,7 @@ export function Dashboard({ embedded = false, onWalletChange }: { embedded?: boo
         </section> : null}
 
         {!embedded ? <footer className="mt-8 flex flex-col gap-2 border-t border-border pt-5 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-          <span>OSSR v0.1 prototype · Testnet only · Do not use mainnet funds</span>
+          <span>OSSR v0.1 · {stacksNetworkLabel}</span>
           <span>The relay pays STX. You authorize only the reviewed sBTC outflow.</span>
         </footer> : null}
       </div>
@@ -1006,7 +1010,7 @@ function TransactionId({ txid, successful }: { txid?: string; successful: boolea
 
 function hiroTxUrl(txid: string): string {
   const normalized = txid.startsWith('0x') ? txid : `0x${txid}`;
-  return `https://explorer.hiro.so/txid/${normalized}?chain=testnet`;
+  return `https://explorer.hiro.so/txid/${normalized}?chain=${explorerChain}`;
 }
 
 function StatusRow({ icon, label, value, ok }: { icon: React.ReactNode; label: string; value: string; ok: boolean }) {

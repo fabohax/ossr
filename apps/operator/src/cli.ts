@@ -8,6 +8,8 @@ import { JsonReimbursementStore, SbtcReimbursementService } from './reimbursemen
 import { JsonOperatorRegistryStore, OperatorRegistry } from './registry.js';
 import { JsonQuoteStore } from './quote-store.js';
 import { JsonNonceStore } from './nonce-store.js';
+import { getAddressFromPrivateKey } from '@stacks/transactions';
+import { stacksApiUrlForNetwork, stacksNetworkFromEnv } from './network.js';
 
 loadEnv({ path: '.env.local', quiet: true });
 // Optional public USDCx settings for installations with a protected .env.local.
@@ -23,12 +25,18 @@ function required(name: string): string {
 }
 
 const command = process.argv[2] ?? 'health';
+const network = stacksNetworkFromEnv();
+const isMainnet = network === 'mainnet';
+const stacksApiUrl = stacksApiUrlForNetwork(network);
+const sponsorPrivateKey = required(isMainnet ? 'MAINNET_SPONSOR_PRIVATE_KEY' : 'SPONSOR_PRIVATE_KEY');
+const sponsorAddress = getAddressFromPrivateKey(sponsorPrivateKey, network);
+if (isMainnet && process.env.MAINNET_SPONSOR_ADDRESS && process.env.MAINNET_SPONSOR_ADDRESS.trim() !== sponsorAddress) throw new Error('MAINNET_SPONSOR_ADDRESS does not match MAINNET_SPONSOR_PRIVATE_KEY.');
 const operator = new OssrOperator({
-  network: 'testnet',
-  sponsorPrivateKey: required('SPONSOR_PRIVATE_KEY'),
-  stacksApiUrl: process.env.STACKS_API_URL,
-  minimumBalanceMicroStx: BigInt(process.env.OPERATOR_MINIMUM_BALANCE_MICROSTX ?? '0'),
-  nonceStore: new JsonNonceStore(process.env.NONCE_STORE_PATH ?? '.ossr/nonces.json'),
+  network,
+  sponsorPrivateKey,
+  stacksApiUrl,
+  minimumBalanceMicroStx: BigInt(isMainnet ? process.env.MAINNET_OPERATOR_MINIMUM_BALANCE_MICROSTX ?? '1000000' : process.env.OPERATOR_MINIMUM_BALANCE_MICROSTX ?? '0'),
+  nonceStore: new JsonNonceStore(isMainnet ? process.env.MAINNET_NONCE_STORE_PATH ?? '.ossr/mainnet-nonces.json' : process.env.NONCE_STORE_PATH ?? '.ossr/nonces.json'),
 });
 
 async function main(): Promise<void> {
@@ -54,9 +62,13 @@ async function main(): Promise<void> {
     const port = Number(process.env.OPERATOR_PORT ?? '3002');
     const host = process.env.OPERATOR_HOST?.trim() || '127.0.0.1';
     if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error('OPERATOR_PORT must be a valid TCP port.');
+    const quotePrivateKey = required(isMainnet ? 'MAINNET_QUOTE_PRIVATE_KEY' : 'QUOTE_PRIVATE_KEY');
+    if (isMainnet && quotePrivateKey === sponsorPrivateKey) throw new Error('Mainnet quote and sponsor keys must be different.');
+    const simulationApiUrl = isMainnet ? required('MAINNET_STACKS_SIMULATION_API_URL') : process.env.STACKS_SIMULATION_API_URL?.trim();
+    if (isMainnet && process.env.MAINNET_SBTC_DYNAMIC_PRICING !== 'true') throw new Error('Set MAINNET_SBTC_DYNAMIC_PRICING=true before serving mainnet sponsorships.');
     // Testnet PoC default: the configured user wallet is the reimbursement payer.
     // Fallback to the operator sponsor key so the reimbursement worker is active by default.
-    const atomicSbtcEnabled = Boolean(process.env.ADAPTER_CONTRACT_ADDRESS?.trim());
+    const atomicSbtcEnabled = isMainnet || Boolean(process.env.ADAPTER_CONTRACT_ADDRESS?.trim());
     const payerPrivateKey = process.env.REIMBURSEMENT_PAYER_PRIVATE_KEY?.trim() ?? process.env.USER_PRIVATE_KEY?.trim() ?? process.env.SPONSOR_PRIVATE_KEY?.trim();
     // Atomic adapter calls settle the sponsor fee in their own transaction.
     // Running the legacy worker would pay the sponsor a second time.
@@ -79,58 +91,60 @@ async function main(): Promise<void> {
         maximumReimbursementSats: BigInt(process.env.REIMBURSEMENT_MAXIMUM_SATS ?? '1000'),
       },
     }) : undefined;
-    const registry = process.env.OPERATOR_REGISTRY_PATH ? new OperatorRegistry(new JsonOperatorRegistryStore(process.env.OPERATOR_REGISTRY_PATH), undefined, {
+    const registryPath = isMainnet ? process.env.MAINNET_OPERATOR_REGISTRY_PATH : process.env.OPERATOR_REGISTRY_PATH;
+    const registry = registryPath ? new OperatorRegistry(new JsonOperatorRegistryStore(registryPath), undefined, {
       minimumBalanceMicroStx: BigInt(process.env.OPERATOR_MINIMUM_BALANCE_MICROSTX ?? '1'),
       heartbeatTimeoutMs: Number(process.env.OPERATOR_HEARTBEAT_TIMEOUT_MS ?? '60000'),
       maximumFailureRate: Number(process.env.OPERATOR_MAXIMUM_FAILURE_RATE ?? '0.5'),
     }) : undefined;
     const server = createRelayServer({
       operator,
-      stacksApiUrl: process.env.STACKS_API_URL,
+      stacksApiUrl,
       x402: x402ConfigFromEnv(process.env),
-      maximumFeeMicroStx: BigInt(process.env.OPERATOR_MAXIMUM_FEE_MICROSTX ?? '100000'),
+      maximumFeeMicroStx: BigInt(isMainnet ? process.env.MAINNET_OPERATOR_MAXIMUM_FEE_MICROSTX ?? '100000' : process.env.OPERATOR_MAXIMUM_FEE_MICROSTX ?? '100000'),
       reimbursementService,
       reimbursementPollIntervalMs: Number(process.env.REIMBURSEMENT_POLL_INTERVAL_MS ?? '10000'),
       registry,
       healthRegistry: registry,
-      operatorId: process.env.OPERATOR_ID?.trim(),
+      operatorId: (isMainnet ? process.env.MAINNET_OPERATOR_ID : process.env.OPERATOR_ID)?.trim(),
       healthPollIntervalMs: Number(process.env.OPERATOR_HEALTH_POLL_INTERVAL_MS ?? '10000'),
-      quotePrivateKey: process.env.QUOTE_PRIVATE_KEY?.trim(),
-      quoteKeyId: process.env.QUOTE_KEY_ID?.trim(),
-      relayId: process.env.RELAY_ID?.trim(),
-      policyVersion: process.env.OSSR_POLICY_VERSION?.trim(),
-      adapterContractAddress: process.env.ADAPTER_CONTRACT_ADDRESS?.trim(),
-      adapterContractName: process.env.ADAPTER_CONTRACT_NAME?.trim(),
-      sbtcContractAddress: process.env.SBTC_CONTRACT_ADDRESS?.trim(),
-      sbtcContractName: process.env.SBTC_CONTRACT_NAME?.trim(),
-      usdcxAdapterContractAddress: process.env.USDCX_ADAPTER_CONTRACT_ADDRESS?.trim(),
-      usdcxContractAddress: process.env.USDCX_CONTRACT_ADDRESS?.trim(),
-      usdcxContractName: process.env.USDCX_CONTRACT_NAME?.trim(),
-      usdcxSponsorFeeUnits: process.env.USDCX_SPONSOR_FEE_UNITS ? BigInt(process.env.USDCX_SPONSOR_FEE_UNITS) : undefined,
+      quotePrivateKey,
+      quoteKeyId: (isMainnet ? required('MAINNET_QUOTE_KEY_ID') : process.env.QUOTE_KEY_ID)?.trim(),
+      relayId: (isMainnet ? required('MAINNET_RELAY_ID') : process.env.RELAY_ID)?.trim(),
+      policyVersion: (isMainnet ? required('MAINNET_OSSR_POLICY_VERSION') : process.env.OSSR_POLICY_VERSION)?.trim(),
+      adapterContractAddress: (isMainnet ? process.env.MAINNET_ADAPTER_CONTRACT_ADDRESS ?? 'SP17M2KWEK37A5MPDTMWGXJFGJCY41JVQKVK828TQ' : process.env.ADAPTER_CONTRACT_ADDRESS)?.trim(),
+      adapterContractName: (isMainnet ? process.env.MAINNET_ADAPTER_CONTRACT_NAME ?? 'sbtc-sponsored-transfer-mainnet-v1' : process.env.ADAPTER_CONTRACT_NAME)?.trim(),
+      sbtcContractAddress: (isMainnet ? process.env.MAINNET_SBTC_CONTRACT_ADDRESS ?? 'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4' : process.env.SBTC_CONTRACT_ADDRESS)?.trim(),
+      sbtcContractName: (isMainnet ? process.env.MAINNET_SBTC_CONTRACT_NAME ?? 'sbtc-token' : process.env.SBTC_CONTRACT_NAME)?.trim(),
+      usdcxAdapterContractAddress: isMainnet ? undefined : process.env.USDCX_ADAPTER_CONTRACT_ADDRESS?.trim(),
+      usdcxContractAddress: isMainnet ? undefined : process.env.USDCX_CONTRACT_ADDRESS?.trim(),
+      usdcxContractName: isMainnet ? undefined : process.env.USDCX_CONTRACT_NAME?.trim(),
+      usdcxSponsorFeeUnits: isMainnet ? undefined : process.env.USDCX_SPONSOR_FEE_UNITS ? BigInt(process.env.USDCX_SPONSOR_FEE_UNITS) : undefined,
       quoteLifetimeBlocks: BigInt(process.env.QUOTE_TTL_BLOCKS ?? '10'),
       breakEvenFeeSats: BigInt(process.env.SBTC_BREAK_EVEN_FEE_SATS ?? '1'),
-      // Testnet STX is faucet-funded; market conversion is an opt-in cost policy.
-      dynamicPricing: process.env.SBTC_DYNAMIC_PRICING === 'true',
-      estimatedTransactionBytes: BigInt(process.env.SBTC_ESTIMATED_TRANSACTION_BYTES ?? '600'),
-      infrastructureCostSats: BigInt(process.env.SBTC_INFRASTRUCTURE_COST_SATS ?? '0'),
-      riskReserveSats: BigInt(process.env.SBTC_RISK_RESERVE_SATS ?? '0'),
-      minimumProfitSats: BigInt(process.env.SBTC_MINIMUM_PROFIT_SATS ?? '1'),
-      pricingApiUrl: process.env.SBTC_PRICING_API_URL?.trim(),
-      pricingCacheMs: Number(process.env.SBTC_PRICING_CACHE_SECONDS ?? '60') * 1_000,
-      pricingScaleSats: BigInt(process.env.SBTC_LOG_SCALE_SATS ?? '100'),
-      pricingGrowthSats: BigInt(process.env.SBTC_LOG_GROWTH_SATS ?? '2'),
-      sponsorFeeSats: process.env.SBTC_SPONSOR_FEE_SATS
-        ? BigInt(process.env.SBTC_SPONSOR_FEE_SATS)
+      // Mainnet sponsorship requires a live STX/BTC cost floor; testnet retains its opt-in policy.
+      dynamicPricing: isMainnet || process.env.SBTC_DYNAMIC_PRICING === 'true',
+      estimatedTransactionBytes: BigInt(isMainnet ? process.env.MAINNET_SBTC_ESTIMATED_TRANSACTION_BYTES ?? '600' : process.env.SBTC_ESTIMATED_TRANSACTION_BYTES ?? '600'),
+      infrastructureCostSats: BigInt(isMainnet ? process.env.MAINNET_SBTC_INFRASTRUCTURE_COST_SATS ?? '0' : process.env.SBTC_INFRASTRUCTURE_COST_SATS ?? '0'),
+      riskReserveSats: BigInt(isMainnet ? process.env.MAINNET_SBTC_RISK_RESERVE_SATS ?? '0' : process.env.SBTC_RISK_RESERVE_SATS ?? '0'),
+      minimumProfitSats: BigInt(isMainnet ? process.env.MAINNET_SBTC_MINIMUM_PROFIT_SATS ?? '1' : process.env.SBTC_MINIMUM_PROFIT_SATS ?? '1'),
+      pricingApiUrl: (isMainnet ? process.env.MAINNET_SBTC_PRICING_API_URL : process.env.SBTC_PRICING_API_URL)?.trim(),
+      pricingCacheMs: Number((isMainnet ? process.env.MAINNET_SBTC_PRICING_CACHE_SECONDS : process.env.SBTC_PRICING_CACHE_SECONDS) ?? '60') * 1_000,
+      pricingScaleSats: BigInt(isMainnet ? process.env.MAINNET_SBTC_LOG_SCALE_SATS ?? '100' : process.env.SBTC_LOG_SCALE_SATS ?? '100'),
+      pricingGrowthSats: BigInt(isMainnet ? process.env.MAINNET_SBTC_LOG_GROWTH_SATS ?? '2' : process.env.SBTC_LOG_GROWTH_SATS ?? '2'),
+      sponsorFeeSats: (isMainnet ? process.env.MAINNET_SBTC_SPONSOR_FEE_SATS : process.env.SBTC_SPONSOR_FEE_SATS)
+        ? BigInt((isMainnet ? process.env.MAINNET_SBTC_SPONSOR_FEE_SATS : process.env.SBTC_SPONSOR_FEE_SATS)!)
         : undefined,
-      betaAccess: betaAccessFromEnv(process.env),
+      betaAccess: betaAccessFromEnv(process.env, network),
       betaBudget: betaBudgetFromEnv(process.env),
       betaAccountingToken: process.env.OSSR_BETA_ACCOUNTING_TOKEN,
-      pauseFilePath: process.env.OSSR_PAUSE_FILE || '.ossr/paused',
+      operatorHeartbeatToken: process.env.OPERATOR_HEARTBEAT_TOKEN?.trim(),
+      pauseFilePath: isMainnet ? process.env.MAINNET_OSSR_PAUSE_FILE || '.ossr/mainnet-paused' : process.env.OSSR_PAUSE_FILE || '.ossr/paused',
       corsAllowedOrigins: process.env.OSSR_CORS_ALLOWED_ORIGINS?.split(',').map(origin => origin.trim()).filter(Boolean),
-      simulationApiUrl: process.env.STACKS_SIMULATION_API_URL?.trim(),
-      simulationAuthToken: process.env.STACKS_SIMULATION_AUTH_TOKEN?.trim(),
+      simulationApiUrl,
+      simulationAuthToken: (isMainnet ? process.env.MAINNET_STACKS_SIMULATION_AUTH_TOKEN : process.env.STACKS_SIMULATION_AUTH_TOKEN)?.trim(),
       simulationTimeoutMs: Number(process.env.STACKS_SIMULATION_TIMEOUT_MS ?? '15000'),
-      quoteStore: new JsonQuoteStore(process.env.QUOTE_STORE_PATH ?? '.ossr/quotes.json'),
+      quoteStore: new JsonQuoteStore(isMainnet ? process.env.MAINNET_QUOTE_STORE_PATH ?? '.ossr/mainnet-quotes.json' : process.env.QUOTE_STORE_PATH ?? '.ossr/quotes.json'),
     });
     server.listen(port, host, () => console.log(JSON.stringify({ event: 'relay.listening', host, port, operator: operator.address })));
     return;

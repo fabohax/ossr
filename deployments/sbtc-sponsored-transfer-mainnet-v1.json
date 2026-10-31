@@ -1,0 +1,10 @@
+{
+  "network": "mainnet",
+  "contract": "SP17M2KWEK37A5MPDTMWGXJFGJCY41JVQKVK828TQ.sbtc-sponsored-transfer-mainnet-v1",
+  "transactionId": "0xd399090538cdd6835b037999f4629a04b8b04f2cbe0e82318bb3fff5d00a48af",
+  "blockHeight": 9339257,
+  "clarityVersion": 4,
+  "feeMicroStx": "4536",
+  "sourceSha256": "2667e62e2038a744fde6134b14635cc2394194738e5f130ee8de79254b65ff65",
+  "tokenContract": "SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token"
+}

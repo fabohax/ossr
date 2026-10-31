@@ -1,6 +1,7 @@
 import { fetchSbtcBalance, type SbtcBalance } from './ossr';
+import { configuredSbtcContract, isAddressForNetwork } from './network';
 
-export const defaultSbtcContract = 'SN3VMHXEN64ZZF71JQ5VESXDWTR301XTTXGF4J8F1.sbtc-token';
+export const defaultSbtcContract = configuredSbtcContract();
 const balances = new Map<string, { value: SbtcBalance; fetchedAt: number }>();
 const pending = new Map<string, Promise<SbtcBalance>>();
 const freshMs = 10_000;
@@ -28,6 +29,6 @@ export function fetchDisplaySbtcBalance(address: string, contract = defaultSbtcC
 }
 
 export function prefetchSbtcBalance(address: string) {
-  if (!/^(ST|SN)/.test(address)) return;
+  if (!isAddressForNetwork(address)) return;
   void fetchDisplaySbtcBalance(address, process.env.NEXT_PUBLIC_OSSR_SBTC_CONTRACT || defaultSbtcContract).catch(() => undefined);
 }

@@ -1,4 +1,4 @@
-# Testnet UI deployment and evidence runbook
+# UI deployment and evidence runbook
 
 Use Node 24 and npm 11.17.0. Install the repository and UI dependencies
 with `npm ci` in each directory. Never put sponsor or quote signing private keys
@@ -7,18 +7,30 @@ in the UI environment. Public quote verification keys are safe to expose.
 ## Public deployment configuration
 
 Set `OSSR_DEPLOYMENT=public` for public builds. The build rejects missing trust,
-mainnet, noncanonical principals, invalid public keys, HTTP upstreams, credentials
-in upstream URLs, and local-only upstreams. Local development may omit this flag;
+noncanonical principals, invalid public keys, HTTP upstreams, credentials in
+upstream URLs, and local-only upstreams. Local development may omit this flag;
 this does not validate a public deployment. Configure all of:
 
 - `OSSR_RELAY_PROXY_URL`: public HTTPS relay origin.
-- `STACKS_API_URL`: public HTTPS Stacks testnet API origin.
-- `NEXT_PUBLIC_OSSR_NETWORK=testnet`.
+- `STACKS_API_URL`: public HTTPS Stacks API origin for the selected network.
+- `NEXT_PUBLIC_OSSR_NETWORK=testnet` or `mainnet`.
 - `NEXT_PUBLIC_OSSR_QUOTE_PUBLIC_KEY`: compressed secp256k1 quote public key.
 - `NEXT_PUBLIC_OSSR_RELAY_ID`, `NEXT_PUBLIC_OSSR_QUOTE_KEY_ID`, and
   `NEXT_PUBLIC_OSSR_POLICY_VERSION`: exact values from the selected relay.
 - `NEXT_PUBLIC_OSSR_ADAPTER_CONTRACT`, `NEXT_PUBLIC_OSSR_SBTC_CONTRACT`, and
-  `NEXT_PUBLIC_OSSR_SPONSOR_PRINCIPAL`: independently verified testnet principals.
+  `NEXT_PUBLIC_OSSR_SPONSOR_PRINCIPAL`: independently verified principals for
+  the selected network. Mainnet builds pin the deployed OSSR mainnet adapter and
+  canonical mainnet sBTC contract.
+
+For a mainnet build, configure `STACKS_API_URL=https://stacks-node-api.mainnet.stacks.co`,
+`NEXT_PUBLIC_OSSR_NETWORK=mainnet`, adapter
+`SP17M2KWEK37A5MPDTMWGXJFGJCY41JVQKVK828TQ.sbtc-sponsored-transfer-mainnet-v1`,
+and token `SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token`. Obtain the
+relay ID, sponsor principal, quote key, quote key ID, and policy version from a
+mainnet relay through a trusted channel. The UI checks that `/v1/info` reports
+the configured network and disables approval when it does not. The current
+repository relay still supports testnet only; a mainnet UI build must not be
+released until its configured relay supports mainnet end to end.
 
 Check `/v1/info` against these values and obtain the public key from the operator
 through a trusted channel; do not automatically trust keys returned by quotes.

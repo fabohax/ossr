@@ -7,9 +7,10 @@ import { ArrowRight, Check, ChevronRight, Code2, Github, Server, TerminalSquare,
 import { Layer, Wallet } from 'iconsax-reactjs';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { connectTestnetWallet } from '@/lib/connect-wallet';
+import { connectStacksWallet } from '@/lib/connect-wallet';
 import { prefetchSbtcBalance } from '@/lib/sbtc-balance';
-import { connectedWalletPublicKeyKey, requireTestnetStacksAccount } from '@/lib/stacks-wallet';
+import { connectedWalletPublicKeyKey, requireStacksAccount } from '@/lib/stacks-wallet';
+import { stacksNetworkLabel } from '@/lib/network';
 import { Dashboard } from './dashboard/dashboard-client';
 import styles from './page.module.css';
 import { nostrProfileUrl } from '@/lib/social';
@@ -61,8 +62,8 @@ export default function Home() {
     setConnectingWallet(true);
     setWalletError('');
     try {
-      const response = await connectTestnetWallet();
-      const account = requireTestnetStacksAccount(response);
+      const response = await connectStacksWallet();
+      const account = requireStacksAccount(response);
       window.localStorage.setItem(connectedAddressKey, account.address);
       if (account.publicKey) window.localStorage.setItem(connectedWalletPublicKeyKey, account.publicKey);
       else window.localStorage.removeItem(connectedWalletPublicKeyKey);
@@ -137,7 +138,7 @@ export default function Home() {
       <article id="developers" className={styles.path}><div className={styles.cardIcon}><Code2 /></div><span className={styles.kicker}>FOR DEVELOPERS</span><h2>Make gasless feel native.</h2><p>Integrate sponsored sBTC transfers with a small, predictable API designed for modern applications.</p><Link href="/developers">Read the docs <ArrowRight /></Link><div className={styles.code}><div><TerminalSquare /><span>request.ts</span></div><pre><span>const</span> quote = <span>await</span> ossr.quote({'{'}{`\n  amount: 1000,\n  token: 'sBTC'\n`}{'}'});</pre></div></article>
     </section>
 
-    <section className={styles.final}><span className={styles.kicker}>READY TO GET STARTED?</span><h2>The open relay layer for Stacks.</h2><p>Connect your wallet and experience sponsored transactions on testnet.</p><Button size="lg" className={styles.primary} onClick={() => setTransferOpen(true)}>Connect to OSSR <ArrowRight /></Button></section>
+    <section className={styles.final}><span className={styles.kicker}>READY TO GET STARTED?</span><h2>The open relay layer for Stacks.</h2><p>Connect your wallet and experience sponsored transactions on {stacksNetworkLabel}.</p><Button size="lg" className={styles.primary} onClick={() => setTransferOpen(true)}>Connect to OSSR <ArrowRight /></Button></section>
     <footer className={styles.footer}><div className={styles.brand}><Image src="/ossr-logo-120.png" alt="OSSR" width={60} height={24} /></div><p>Open Stacks Sponsor Relay. Built for the Plebs.</p><div><Link href="/docs">Protocol</Link><Link href="/operators">Operators</Link><Link href="/developers">Developers</Link><a href={nostrProfileUrl} aria-label="OSSR on Nostr" className={styles.nostrLink}>Nostr</a><a href="https://github.com/ossr-protocol" aria-label="OSSR Protocol on GitHub"><Github /></a></div></footer>
 
     <Dialog open={transferOpen} onOpenChange={setTransferOpen}>

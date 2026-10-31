@@ -34,6 +34,7 @@
     "test:nonce-store": "tsx apps/operator/src/nonce-store.test.ts",
     "nostr:publish": "node scripts/nostr-publish.mjs",
     "deploy:usdcx": "tsx packages/stacks/scripts/deploy-usdcx-adapter.ts",
+    "deploy:mainnet:sbtc": "tsx packages/stacks/scripts/deploy-mainnet-sbtc-adapter.ts",
     "test:beta-access": "tsx --test apps/operator/src/beta-access.test.ts",
     "test:beta-budget": "tsx --test apps/operator/src/beta-budget.test.ts"
   },

@@ -13,7 +13,8 @@ const localDevOrigins = process.env.OSSR_ALLOWED_DEV_ORIGINS
   .filter(Boolean) ?? [];
 const relayProxyUrl = (process.env.OSSR_RELAY_PROXY_URL || 'https://relay.ossr.network').replace(/\/$/, '');
 
-const stacksApiUrl = (process.env.STACKS_API_URL || process.env.NEXT_PUBLIC_STACKS_API_URL || 'https://api.testnet.hiro.so').replace(/\/$/, '');
+const defaultStacksApiUrl = process.env.NEXT_PUBLIC_OSSR_NETWORK === 'mainnet' ? 'https://stacks-node-api.mainnet.stacks.co' : 'https://api.testnet.hiro.so';
+const stacksApiUrl = (process.env.STACKS_API_URL || process.env.NEXT_PUBLIC_STACKS_API_URL || defaultStacksApiUrl).replace(/\/$/, '');
 
 const nextConfig: NextConfig = {
   distDir: process.env.OSSR_UI_DIST_DIR || '.next',

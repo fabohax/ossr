@@ -1,3 +1,6 @@
+
+import { isAddressForNetwork, isStandardAddressForNetwork, stacksNetwork, stacksNetworkLabel, type StacksNetworkName } from './network.ts';
+
 export type WalletAddress = {
   symbol?: string;
   address?: string;
@@ -22,25 +25,29 @@ export function readStacksAddress(response: unknown): string | undefined {
 }
 
 export function requireTestnetStacksAccount(response: unknown): WalletAddress & { address: string } {
-  const account = readStacksAccount(response);
+  return requireStacksAccount(response, 'testnet');
+}
+
+export function requireStacksAccount(response: unknown, network: StacksNetworkName = stacksNetwork): WalletAddress & { address: string } {
+  const account = readStacksAccount(response, undefined, network);
   if (account?.address) return { ...account, address: account.address };
-  if (readWalletAddresses(response).some(entry => typeof entry.address === 'string' && /^(SP|SM)/.test(entry.address))) {
-    throw new Error('OSSR currently uses Stacks testnet. Switch Leather or Xverse to testnet, then reconnect.');
+  if (readWalletAddresses(response).some(entry => typeof entry.address === 'string' && isAddressForNetwork(entry.address, network === 'mainnet' ? 'testnet' : 'mainnet'))) {
+    throw new Error(`OSSR currently uses ${stacksNetworkLabel}. Switch Leather or Xverse to ${network}, then reconnect.`);
   }
-  throw new Error('The wallet did not return a Stacks testnet address. Enable Stacks in your wallet and reconnect.');
+  throw new Error(`The wallet did not return a Stacks ${network} address. Enable Stacks in your wallet and reconnect.`);
 }
 
 // Connect stores STX addresses separately and omits public keys from its cache.
-export function readCachedStacksAccount(session: unknown, expectedAddress?: string): WalletAddress | undefined {
+export function readCachedStacksAccount(session: unknown, expectedAddress?: string, network: StacksNetworkName = stacksNetwork): WalletAddress | undefined {
   if (!isRecord(session) || !isRecord(session.addresses)) return undefined;
   const response = { addresses: session.addresses.stx };
-  return readStacksAccount(response, expectedAddress) ?? readStacksAccount(response);
+  return readStacksAccount(response, expectedAddress, network) ?? readStacksAccount(response, undefined, network);
 }
 
-export function readStacksAccount(response: unknown, expectedAddress?: string): WalletAddress | undefined {
+export function readStacksAccount(response: unknown, expectedAddress?: string, network: StacksNetworkName = stacksNetwork): WalletAddress | undefined {
   return readWalletAddresses(response).find(entry => (
     typeof entry.address === 'string'
-    && /^(ST|SN)/.test(entry.address)
+    && isStandardAddressForNetwork(entry.address, network)
     && (entry.symbol?.toUpperCase() === 'STX' || entry.address.startsWith('S'))
     && (!expectedAddress || entry.address === expectedAddress)
   ));
@@ -54,3 +61,4 @@ export function requiresPrebuiltSponsoredTransaction(providerId: string | null |
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+

@@ -7,13 +7,13 @@ import {
   sponsorTransaction,
 } from '@stacks/transactions';
 import { MemoryNonceStore, type NonceReservation, type NonceStore } from './nonce-store.js';
+import { stacksApiUrlForNetwork, type StacksNetworkName } from './network.js';
 
 export type LogFields = Record<string, unknown>;
 export type Logger = (event: string, fields?: LogFields) => void;
 
 export type OperatorConfig = {
-  /** Testnet only for the current OSSR PoC. */
-  network: 'testnet';
+  network: StacksNetworkName;
   sponsorPrivateKey: string;
   /** Do not sponsor if the hot wallet would fall below this amount. */
   minimumBalanceMicroStx?: bigint;
@@ -30,7 +30,7 @@ export type OperatorBalance = {
 
 export type OperatorHealth = {
   healthy: boolean;
-  network: 'testnet';
+  network: StacksNetworkName;
   address: string;
   balanceMicroStx?: string;
   minimumBalanceMicroStx: string;
@@ -48,6 +48,7 @@ export type SponsoredTransaction = { transaction: Uint8Array; txid: string; spon
 
 export class OssrOperator {
   readonly address: string;
+  readonly network: StacksNetworkName;
   private readonly apiUrl: string;
   private readonly minimumBalanceMicroStx: bigint;
   private readonly log: Logger;
@@ -57,8 +58,9 @@ export class OssrOperator {
 
   constructor(private readonly config: OperatorConfig) {
     if (!config.sponsorPrivateKey.trim()) throw new Error('SPONSOR_PRIVATE_KEY is required.');
+    this.network = config.network;
     this.address = getAddressFromPrivateKey(config.sponsorPrivateKey, config.network);
-    this.apiUrl = (config.stacksApiUrl ?? 'https://api.testnet.hiro.so').replace(/\/$/, '');
+    this.apiUrl = config.stacksApiUrl ? validateConfiguredApi(config.stacksApiUrl, config.network) : stacksApiUrlForNetwork(config.network);
     this.minimumBalanceMicroStx = config.minimumBalanceMicroStx ?? 0n;
     this.log = config.logger ?? jsonLogger;
     this.nonceStore = config.nonceStore ?? new MemoryNonceStore();
@@ -238,6 +240,15 @@ export class OssrOperator {
     this.log('operator.sponsored', { txid, sponsorNonce: sponsorNonce.toString(), feeMicroStx: feeMicroStx.toString() });
     return { transaction: serialized, txid, sponsorNonce };
   }
+}
+
+function validateConfiguredApi(value: string, network: StacksNetworkName): string {
+  const url = new URL(value);
+  if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Stacks API URL must use HTTPS without credentials.');
+  const hostname = url.hostname.toLowerCase();
+  if (network === 'mainnet' && hostname.includes('testnet')) throw new Error('Mainnet operator cannot use a testnet Stacks API.');
+  if (network === 'testnet' && hostname.includes('mainnet')) throw new Error('Testnet operator cannot use a mainnet Stacks API.');
+  return value.replace(/\/$/, '');
 }
 
 export const jsonLogger: Logger = (event, fields = {}) => {

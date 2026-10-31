@@ -1,16 +1,18 @@
 import { DEFAULT_PROVIDERS, request, setSelectedProviderId, type StacksProvider } from '@stacks/connect';
 import { getInstalledProviders, getProviderFromId } from '@stacks/connect-ui';
 import { defineCustomElements } from '@stacks/connect-ui/loader';
-import { approvedWalletProviderIds, requireTestnetStacksAccount } from './stacks-wallet';
+import { approvedWalletProviderIds, requireStacksAccount } from './stacks-wallet';
 import { enableDarkStacksWalletSelector } from './stacks-wallet-theme';
 import { prefetchSbtcBalance } from './sbtc-balance';
+import { stacksNetwork, type StacksNetworkName } from './network';
 
 type WalletProvider = { request(method: string, params: Record<string, unknown>): Promise<unknown> };
 
-export function walletConnectionRequest(providerId: string) {
+export function walletConnectionRequest(providerId: string, network: StacksNetworkName = stacksNetwork) {
+  const walletNetwork = network === 'mainnet' ? 'Mainnet' : 'Testnet';
   return providerId === 'XverseProviders.BitcoinProvider'
-    ? { method: 'wallet_connect', params: { network: 'Testnet', addresses: ['stacks'], message: 'Connect to OSSR on Stacks testnet' } }
-    : { method: 'stx_getAddresses', params: { network: 'testnet' } };
+    ? { method: 'wallet_connect', params: { network: walletNetwork, addresses: ['stacks'], message: `Connect to OSSR on Stacks ${network}` } }
+    : { method: 'stx_getAddresses', params: { network } };
 }
 
 export async function withWalletTimeout<T>(operation: Promise<T>, timeoutMs = 60_000): Promise<T> {
@@ -22,23 +24,23 @@ export async function withWalletTimeout<T>(operation: Promise<T>, timeoutMs = 60
   } finally { clearTimeout(timer); }
 }
 
-export async function requestTestnetWalletAccounts(providerId: string, provider: WalletProvider, timeoutMs = 60_000) {
-  const connection = walletConnectionRequest(providerId);
+export async function requestStacksWalletAccounts(providerId: string, provider: WalletProvider, timeoutMs = 60_000, network: StacksNetworkName = stacksNetwork) {
+  const connection = walletConnectionRequest(providerId, network);
   // Route by the selected provider ID, not Connect's legacy feature detection.
   // Bound the raw request so a late wallet response cannot update Connect's cache.
   const adapter = {
     request: async () => {
       const result = await withWalletTimeout(provider.request(connection.method, connection.params), timeoutMs);
-      if (result && typeof result === 'object' && !('error' in result)) requireTestnetStacksAccount(result);
+      if (result && typeof result === 'object' && !('error' in result)) requireStacksAccount(result, network);
       return result;
     },
   } as unknown as StacksProvider;
   const response = await request({ provider: adapter, enableOverrides: false }, 'getAddresses');
-  requireTestnetStacksAccount(response);
+  requireStacksAccount(response, network);
   return response;
 }
 
-export async function connectTestnetWallet() {
+export async function connectStacksWallet(network: StacksNetworkName = stacksNetwork) {
   await defineCustomElements(window);
   const stopTheme = enableDarkStacksWalletSelector();
   const modal = document.createElement('connect-modal');
@@ -71,10 +73,10 @@ export async function connectTestnetWallet() {
   });
   const provider = getProviderFromId(providerId) as WalletProvider | undefined;
   if (!provider?.request) throw new Error('Wallet extension was not found. Install or enable it, then reload the page.');
-  console.info('[wallet:connect] requesting testnet account', { providerId });
+  console.info('[wallet:connect] requesting account', { providerId, network });
   try {
-    const response = await requestTestnetWalletAccounts(providerId, provider);
-    prefetchSbtcBalance(requireTestnetStacksAccount(response).address);
+    const response = await requestStacksWalletAccounts(providerId, provider, 60_000, network);
+    prefetchSbtcBalance(requireStacksAccount(response, network).address);
     setSelectedProviderId(providerId);
     console.info('[wallet:connect] connected', { providerId });
     return response;
@@ -82,4 +84,12 @@ export async function connectTestnetWallet() {
     console.warn('[wallet:connect] failed', { providerId, message: error instanceof Error ? error.message : 'Unknown wallet error' });
     throw error;
   }
+}
+
+export function requestTestnetWalletAccounts(providerId: string, provider: WalletProvider, timeoutMs = 60_000) {
+  return requestStacksWalletAccounts(providerId, provider, timeoutMs, 'testnet');
+}
+
+export function connectTestnetWallet() {
+  return connectStacksWallet('testnet');
 }

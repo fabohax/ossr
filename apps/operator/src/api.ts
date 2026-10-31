@@ -36,6 +36,7 @@ import { SbtcReimbursementService } from './reimbursement.js';
 import { OperatorRegistry, type OperatorRegistryReader, toEntry } from './registry.js';
 import { X402Payments, X402Error, encodePayment, type X402Config } from './x402.js';
 import { MemoryQuoteStore, type QuoteStore } from './quote-store.js';
+import { stacksApiUrlForNetwork, type StacksNetworkName } from './network.js';
 
 const MAX_BODY_BYTES = 256 * 1024;
 const HEX = /^0x(?:[0-9a-fA-F]{2})+$/;
@@ -120,7 +121,7 @@ export type TransferQuote = {
   protocolVersion: '1';
   quoteId: string;
   relayId: string;
-  network: 'testnet';
+  network: StacksNetworkName;
   sponsorPrincipal: string;
   origin: string;
   action: 'sbtc-transfer' | 'usdcx-transfer';
@@ -220,7 +221,7 @@ export class OssrRelayApi {
     this.betaBudget = config.betaBudget ? new BetaBudget(config.betaBudget) : undefined;
     this.betaAccess = config.betaAccess ? new BetaAccess(config.betaAccess) : undefined;
     this.payments = config.x402 ? new X402Payments(config.x402) : undefined;
-    this.stacksApiUrl = (config.stacksApiUrl ?? 'https://api.testnet.hiro.so').replace(/\/$/, '');
+    this.stacksApiUrl = (config.stacksApiUrl ?? stacksApiUrlForNetwork(config.operator.network)).replace(/\/$/, '');
     this.maximumFeeMicroStx = config.maximumFeeMicroStx ?? 100_000n;
     this.healthPollIntervalMs = config.healthPollIntervalMs ?? 10_000;
     if (!Number.isSafeInteger(this.healthPollIntervalMs) || this.healthPollIntervalMs < 1) throw new Error('healthPollIntervalMs must be a positive safe integer.');
@@ -230,7 +231,17 @@ export class OssrRelayApi {
     this.simulationTimeoutMs = config.simulationTimeoutMs ?? 15_000;
     if (!Number.isSafeInteger(this.simulationTimeoutMs) || this.simulationTimeoutMs < 1) throw new Error('simulationTimeoutMs must be a positive safe integer.');
     if (config.usdcxSponsorFeeUnits !== undefined && (config.usdcxSponsorFeeUnits <= 0n || config.usdcxSponsorFeeUnits > 10_000n)) throw new Error('usdcxSponsorFeeUnits must be between 1 and 10000 micro-USDCx.');
-    if (config.usdcxAdapterContractAddress && (!validateStacksAddress(config.usdcxAdapterContractAddress) || !/^ST/.test(config.usdcxAdapterContractAddress))) throw new Error('USDCx adapter requires a testnet standard principal.');
+    if (config.operator.network === 'mainnet' && (config.usdcxAdapterContractAddress || config.usdcxSponsorFeeUnits !== undefined)) throw new Error('Mainnet relay currently supports only the deployed sBTC adapter.');
+    if (config.usdcxAdapterContractAddress && (!validateStacksAddress(config.usdcxAdapterContractAddress) || !(config.operator.network === 'mainnet' ? /^SP/ : /^ST/).test(config.usdcxAdapterContractAddress))) throw new Error(`USDCx adapter requires a ${config.operator.network} standard principal.`);
+    if (config.operator.network === 'mainnet') {
+      const expectedAdapter = 'SP17M2KWEK37A5MPDTMWGXJFGJCY41JVQKVK828TQ.sbtc-sponsored-transfer-mainnet-v1';
+      const adapterAddress = config.adapterContractAddress ?? process.env.MAINNET_ADAPTER_CONTRACT_ADDRESS?.trim() ?? 'SP17M2KWEK37A5MPDTMWGXJFGJCY41JVQKVK828TQ';
+      const adapterName = config.adapterContractName ?? process.env.MAINNET_ADAPTER_CONTRACT_NAME?.trim() ?? 'sbtc-sponsored-transfer-mainnet-v1';
+      if (`${adapterAddress}.${adapterName}` !== expectedAdapter) throw new Error('Mainnet relay adapter must match the deployed OSSR mainnet sBTC contract.');
+      const sbtcAddress = config.sbtcContractAddress ?? process.env.MAINNET_SBTC_CONTRACT_ADDRESS?.trim() ?? 'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4';
+      const sbtcName = config.sbtcContractName ?? process.env.MAINNET_SBTC_CONTRACT_NAME?.trim() ?? 'sbtc-token';
+      if (`${sbtcAddress}.${sbtcName}` !== 'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token') throw new Error('Mainnet relay must use the canonical sBTC token contract.');
+    }
     this.quoteStore = config.quoteStore ?? new MemoryQuoteStore();
   }
 
@@ -271,7 +282,7 @@ export class OssrRelayApi {
     this.betaAccess?.requireWallet(user);
     if (!quoteId) throw new RelayError(400, 'QUOTE_REQUIRED', 'A relay-issued quoteId is required for sponsorship.');
     const quote = await this.requireUsableQuote(quoteId, user);
-    const transaction = deserializeOriginTransaction(encoded, user);
+    const transaction = deserializeOriginTransaction(encoded, user, this.config.operator.network);
     this.config.validateTransaction?.(transaction);
     defaultTransactionPolicy(transaction, quote.quote.adapterContract);
     validateTransactionAgainstQuote(transaction, quote);
@@ -353,7 +364,7 @@ export class OssrRelayApi {
     return {
       apiVersion: '1',
       relayId: this.config.relayId ?? this.config.operatorId ?? this.config.operator.address,
-      network: 'testnet',
+      network: this.config.operator.network,
       sponsorPrincipal: this.config.operator.address,
       supportedActions: ['sbtc-transfer', ...(usdcxSupported ? ['usdcx-transfer'] : [])],
       usdcx: usdcxSupported ? { adapterContract: `${this.config.usdcxAdapterContractAddress}.usdcx-sponsored-transfer-v1`, reimbursementAsset: usdcxAsset, sponsorFeeUnits: this.config.usdcxSponsorFeeUnits!.toString(), maximumTransferUnits: '10000000', maximumSponsorFeeUnits: '10000' } : undefined,
@@ -444,7 +455,7 @@ export class OssrRelayApi {
       protocolVersion: '1',
       quoteId,
       relayId: this.config.relayId ?? this.config.operatorId ?? this.config.operator.address,
-      network: 'testnet',
+      network: this.config.operator.network,
       sponsorPrincipal: this.config.operator.address,
       origin: intent.origin,
       action: usdcx ? 'usdcx-transfer' : 'sbtc-transfer',
@@ -459,7 +470,7 @@ export class OssrRelayApi {
       policyVersion: this.config.policyVersion ?? 'dev',
       keyId: this.config.quoteKeyId ?? 'dev-quote-key',
     };
-    const quote = { ...unsigned, signature: signStructuredData({ message: quoteMessageCV(unsigned), domain: quoteDomainCV(), privateKey: this.config.quotePrivateKey }) };
+    const quote = { ...unsigned, signature: signStructuredData({ message: quoteMessageCV(unsigned), domain: quoteDomainCV(this.config.operator.network), privateKey: this.config.quotePrivateKey }) };
     await this.quoteStore.putIssued({ quote, intent });
     recordLatency(this.counters.latencyMs.quote, Date.now() - startedAt);
     return { quote, quotePublicKey: this.quotePublicKey() };
@@ -920,21 +931,25 @@ function parseHeartbeatRequest(input: unknown): { operatorId: string; stxBalance
   return { operatorId: input.operator_id, stxBalanceMicroStx: input.stx_balance_microstx, recentSuccessfulTransactions: input.recent_successful_transactions as string[] | undefined };
 }
 
-function deserializeOriginTransaction(encoded: string, user: string): ReturnType<typeof deserializeTransaction> {
+function deserializeOriginTransaction(encoded: string, user: string, network: StacksNetworkName): ReturnType<typeof deserializeTransaction> {
   let transaction: ReturnType<typeof deserializeTransaction>;
   try { transaction = deserializeTransaction(encoded); } catch { throw new RelayError(400, 'INVALID_TRANSACTION', 'transaction could not be decoded.'); }
-  if (transaction.chainId !== 0x80000000) throw new RelayError(422, 'WRONG_NETWORK', 'Only Stacks testnet transactions are supported.');
+  const expectedChainId = network === 'mainnet' ? 1 : 0x80000000;
+  if (transaction.chainId !== expectedChainId) throw new RelayError(422, 'WRONG_NETWORK', `Only Stacks ${network} transactions are supported.`);
   if (transaction.auth.authType !== AuthType.Sponsored) throw new RelayError(422, 'UNSUPPORTED_AUTH', 'transaction must use sponsored authorization.');
   try { transaction.verifyOrigin(); } catch { throw new RelayError(422, 'INVALID_ORIGIN_SIGNATURE', 'transaction has an invalid origin signature.'); }
-  const expectedUser = originAddress(transaction);
+  const expectedUser = originAddress(transaction, network);
   if (user !== expectedUser) throw new RelayError(422, 'ORIGIN_MISMATCH', 'user does not match the transaction origin.');
   return transaction;
 }
 
-function originAddress(transaction: ReturnType<typeof deserializeTransaction>): string {
+function originAddress(transaction: ReturnType<typeof deserializeTransaction>, network: StacksNetworkName): string {
   const condition = transaction.auth.spendingCondition;
   const singleSig = condition.hashMode === AddressHashMode.P2PKH || condition.hashMode === AddressHashMode.P2WPKH;
-  return addressToString(addressFromVersionHash(singleSig ? AddressVersion.TestnetSingleSig : AddressVersion.TestnetMultiSig, condition.signer));
+  const version = network === 'mainnet'
+    ? (singleSig ? AddressVersion.MainnetSingleSig : AddressVersion.MainnetMultiSig)
+    : (singleSig ? AddressVersion.TestnetSingleSig : AddressVersion.TestnetMultiSig);
+  return addressToString(addressFromVersionHash(version, condition.signer));
 }
 
 function defaultTransactionPolicy(transaction: ReturnType<typeof deserializeTransaction>, adapterContract: string): void {
@@ -1010,8 +1025,8 @@ function argumentsHash(input: QuoteIntent & { quoteId: string; sponsorFee: bigin
   }))}`;
 }
 
-function quoteDomainCV() {
-  return tupleCV({ name: stringAsciiCV('ossr-quote'), version: stringAsciiCV('1'), 'chain-id': uintCV(2147483648n) });
+function quoteDomainCV(network: StacksNetworkName) {
+  return tupleCV({ name: stringAsciiCV('ossr-quote'), version: stringAsciiCV('1'), 'chain-id': uintCV(network === 'mainnet' ? 1n : 2147483648n) });
 }
 
 function quoteMessageCV(quote: TransferQuote) {
@@ -1096,10 +1111,31 @@ function corsHeaders(request: IncomingMessage, allowedOrigins: string[]): Record
 }
 
 function parseCorsOrigins(value: string | undefined): string[] {
-  return (value ?? 'http://localhost:3000,http://127.0.0.1:3000,http://192.168.18.82:3000')
+  return (value ?? 'http://localhost:3000,http://127.0.0.1:3000')
     .split(',')
     .map(origin => origin.trim().replace(/\/$/, ''))
     .filter(Boolean);
+}
+
+function isLoopback(address: string | undefined): boolean {
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+function limitPublicRequest(windows: Map<string, { startedAt: number; count: number }>, address: string, kind: 'read' | 'write', now = Date.now()): { retryAfterSeconds: number } | undefined {
+  const duration = 60_000;
+  const maximum = kind === 'write' ? 20 : 120;
+  const key = `${address}:${kind}`;
+  let window = windows.get(key);
+  if (!window || now - window.startedAt >= duration) {
+    if (windows.size >= 10_000) {
+      for (const [candidate, value] of windows) if (now - value.startedAt >= duration) windows.delete(candidate);
+      if (windows.size >= 10_000) return { retryAfterSeconds: 60 };
+    }
+    window = { startedAt: now, count: 0 };
+    windows.set(key, window);
+  }
+  window.count += 1;
+  return window.count > maximum ? { retryAfterSeconds: Math.max(1, Math.ceil((duration - (now - window.startedAt)) / 1000)) } : undefined;
 }
 
 function recordLatency(accumulator: LatencyAccumulator, milliseconds: number): void {

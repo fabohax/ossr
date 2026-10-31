@@ -22,11 +22,12 @@ import {
   uintCV,
 } from '@stacks/transactions';
 import type { ContractIdString } from '@stacks/transactions';
+import { configuredSbtcContract, stacksNetwork } from './network.ts';
 
 export type RelayInfo = {
   apiVersion: string;
   relayId: string;
-  network: 'testnet';
+  network: 'testnet' | 'mainnet';
   sponsorPrincipal: string;
   supportedActions: string[];
   adapterContract?: string;
@@ -59,7 +60,7 @@ export type Quote = {
   protocolVersion: '1';
   quoteId: string;
   relayId: string;
-  network: 'testnet';
+  network: 'testnet' | 'mainnet';
   sponsorPrincipal: string;
   origin: string;
   action: 'sbtc-transfer' | 'usdcx-transfer';
@@ -184,10 +185,10 @@ export async function fetchSponsorshipStatus(relayUrl: string, txid: string): Pr
 function stacksApiUrl(): string {
   // Browser requests stay on the UI origin to avoid upstream CORS restrictions.
   if (typeof window !== 'undefined') return '/stacks-api';
-  return process.env.STACKS_API_URL || process.env.NEXT_PUBLIC_STACKS_API_URL || 'https://api.testnet.hiro.so';
+  return process.env.STACKS_API_URL || process.env.NEXT_PUBLIC_STACKS_API_URL || (stacksNetwork === 'mainnet' ? 'https://stacks-node-api.mainnet.stacks.co' : 'https://api.testnet.hiro.so');
 }
 
-export async function fetchSbtcBalance(address: string, sbtcContract = 'SN3VMHXEN64ZZF71JQ5VESXDWTR301XTTXGF4J8F1.sbtc-token'): Promise<SbtcBalance> {
+export async function fetchSbtcBalance(address: string, sbtcContract = configuredSbtcContract()): Promise<SbtcBalance> {
   const apiUrl = stacksApiUrl();
   const response = await fetchJson<{ fungible_tokens?: Record<string, { balance?: string }> }>(
     `${apiUrl.replace(/\/$/, '')}/extended/v1/address/${address}/balances`,
@@ -261,11 +262,11 @@ export async function prepareUnsignedSponsoredTransaction(input: {
   publicKey: string;
   nonce?: bigint;
 }): Promise<string> {
-  const derivedAddress = getAddressFromPublicKey(input.publicKey, 'testnet');
+  const derivedAddress = getAddressFromPublicKey(input.publicKey, stacksNetwork);
   if (derivedAddress !== input.origin) {
     throw new Error('The wallet public key does not match the connected Stacks address. Reconnect the wallet and try again.');
   }
-  const nonce = input.nonce ?? await fetchNonce({ address: input.origin, network: 'testnet', client: { baseUrl: stacksApiUrl() } }).catch(error => {
+  const nonce = input.nonce ?? await fetchNonce({ address: input.origin, network: stacksNetwork, client: { baseUrl: stacksApiUrl() } }).catch(error => {
     if (error instanceof TypeError) throw new NetworkRequestError(`${stacksApiUrl()} (account nonce)`, false, error);
     throw error;
   });
@@ -280,7 +281,7 @@ export async function prepareUnsignedSponsoredTransaction(input: {
     nonce,
     fee: 0n,
     sponsored: true,
-    network: 'testnet',
+    network: stacksNetwork,
   });
   return `0x${transaction.serialize()}`;
 }
@@ -330,12 +331,12 @@ export function likelyFailureCause(status: SponsorshipStatus | undefined, contex
     : undefined;
   if (adapterError?.code === 109) {
     return requiredSats
-      ? `The adapter failed while reimbursing the sponsor: ERR_FEE_TRANSFER_FAILED (u109). The origin address${context?.origin ? ` ${context.origin}` : ''} needs at least ${requiredSats} sats of testnet sBTC before signing this transfer.`
+      ? `The adapter failed while reimbursing the sponsor: ERR_FEE_TRANSFER_FAILED (u109). The origin address${context?.origin ? ` ${context.origin}` : ''} needs at least ${requiredSats} sats of ${stacksNetwork} sBTC before signing this transfer.`
       : 'The adapter failed while reimbursing the sponsor: ERR_FEE_TRANSFER_FAILED (u109). The origin address does not appear able to pay the sponsor fee in sBTC.';
   }
   if (adapterError?.code === 110) {
     return requiredSats
-      ? `The adapter failed while paying the recipient: ERR_RECIPIENT_TRANSFER_FAILED (u110). The origin address needs at least ${requiredSats} sats of testnet sBTC for amount plus sponsor fee.`
+      ? `The adapter failed while paying the recipient: ERR_RECIPIENT_TRANSFER_FAILED (u110). The origin address needs at least ${requiredSats} sats of ${stacksNetwork} sBTC for amount plus sponsor fee.`
       : 'The adapter failed while paying the recipient: ERR_RECIPIENT_TRANSFER_FAILED (u110). Check the origin sBTC balance.';
   }
   if (status.status === 'abort_by_post_condition') {
@@ -424,7 +425,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function validateSignedWalletTransaction(raw: string, call: PreparedWalletCall, origin: string): void {
   const tx = deserializeTransaction(raw);
   tx.verifyOrigin();
-  if (tx.auth.authType !== AuthType.Sponsored || tx.chainId !== 2147483648 || tx.auth.spendingCondition.signer !== createAddress(origin).hash160 || tx.postConditionMode !== PostConditionMode.Deny) throw new Error('Wallet returned an unexpected origin, network, or authorization.');
+  const expectedChainId = stacksNetwork === 'mainnet' ? 1 : 2147483648;
+  if (tx.auth.authType !== AuthType.Sponsored || tx.chainId !== expectedChainId || tx.auth.spendingCondition.signer !== createAddress(origin).hash160 || tx.postConditionMode !== PostConditionMode.Deny) throw new Error('Wallet returned an unexpected origin, network, or authorization.');
   if (!('signature' in tx.auth.sponsorSpendingCondition) || !/^0+$/.test(tx.auth.sponsorSpendingCondition.signature.data)) throw new Error('Wallet must return origin-only authorization.');
   const payload = tx.payload;
   if (payload.payloadType !== PayloadType.ContractCall || addressToString(payload.contractAddress) !== call.contractAddress || payload.contractName.content !== call.contractName || payload.functionName.content !== call.functionName || JSON.stringify(payload.functionArgs.map(serializeCV)) !== JSON.stringify(call.functionArgs) || JSON.stringify(tx.postConditions.values.map(serializePostConditionWire)) !== JSON.stringify(call.postConditions)) throw new Error('Wallet changed the reviewed transfer or its exact post-condition.');

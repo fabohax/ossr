@@ -12,15 +12,17 @@ import {
   uintCV,
 } from '@stacks/transactions';
 import type { ContractIdString } from '@stacks/transactions';
+import { stacksApiUrlForNetwork, stacksNetworkFromEnv } from './network.js';
 
 loadEnv({ path: '.env.local', quiet: true });
 loadEnv({ quiet: true });
 
-const network = 'testnet' as const;
+const network = stacksNetworkFromEnv();
 
 type QuoteResponse = {
   quote: {
     quoteId: string;
+    network: 'testnet' | 'mainnet';
     origin: string;
     recipient?: string;
     adapterContract: string;
@@ -54,15 +56,16 @@ function positiveInteger(name: string, fallback: string): bigint {
 }
 
 async function main(): Promise<void> {
-  const userPrivateKey = required('USER_PRIVATE_KEY');
+  const userPrivateKey = required(network === 'mainnet' ? 'MAINNET_USER_PRIVATE_KEY' : 'USER_PRIVATE_KEY');
   const recipient = required('RECIPIENT_ADDRESS');
   const assetId = process.env.OSSR_ASSET_ID ?? 'sbtc';
   if (assetId !== 'sbtc' && assetId !== 'usdcx') throw new Error('OSSR_ASSET_ID must be sbtc or usdcx.');
+  if (network === 'mainnet' && assetId !== 'sbtc') throw new Error('The mainnet OSSR adapter currently supports sBTC only.');
   const usdcx = assetId === 'usdcx';
   const amountSats = positiveInteger(usdcx ? 'USDCX_TRANSFER_AMOUNT_UNITS' : 'SBTC_TRANSFER_AMOUNT_SATS', usdcx ? '1000000' : '100');
   const maxSponsorFeeSats = positiveInteger(usdcx ? 'USDCX_MAX_SPONSOR_FEE_UNITS' : 'SBTC_MAX_SPONSOR_FEE_SATS', usdcx ? '1000' : process.env.SBTC_SPONSOR_FEE_SATS ?? '10');
   const apiUrl = (process.env.OSSR_API_URL ?? 'http://127.0.0.1:3000').replace(/\/$/, '');
-  const stacksApiUrl = (process.env.STACKS_API_URL ?? 'https://api.testnet.hiro.so').replace(/\/$/, '');
+  const stacksApiUrl = stacksApiUrlForNetwork(network);
   const user = getAddressFromPrivateKey(userPrivateKey, network);
   if (recipient === user) throw new Error('RECIPIENT_ADDRESS must differ from the user address.');
 
@@ -79,7 +82,8 @@ async function main(): Promise<void> {
     }),
   });
   const quote = quoteResponse.quote;
-  if (quote.action !== `${assetId}-transfer` || quote.reimbursementAsset.assetId !== assetId) throw new Error('Relay returned a quote for a different asset.');
+  if (quote.network !== network || quote.action !== `${assetId}-transfer` || quote.reimbursementAsset.assetId !== assetId) throw new Error('Relay returned a quote for a different network or asset.');
+  if (network === 'mainnet' && quote.reimbursementAsset.contract !== 'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token') throw new Error('Relay returned an unexpected mainnet sBTC contract.');
   if (usdcx && (quote.reimbursementAsset.contract !== 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.usdcx' || quote.reimbursementAsset.decimals !== '6' || quote.reimbursementAsset.unit !== 'micro-usdcx')) throw new Error('Unexpected USDCx token metadata.');
   if (BigInt(quote.sponsorFee) <= 0n || BigInt(quote.sponsorFee) > maxSponsorFeeSats) throw new Error('Sponsor fee exceeds the requested policy.');
   if (quote.origin !== user) throw new Error('Relay returned a quote for a different origin.');

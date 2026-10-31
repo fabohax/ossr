@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Braces, Code2, ExternalLink, FileKey2, Radio, ShieldCheck, WalletCards } from 'lucide-react';
+import { stacksNetwork } from '@/lib/network';
 
 export const metadata: Metadata = {
   title: 'Developer Integration — OSSR',
@@ -46,7 +47,7 @@ export default function DevelopersPage() {
         </div>
         <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/30 shadow-2xl">
           <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3 font-mono text-[10px] text-muted-foreground"><Braces className="size-3.5 text-primary" /> sponsored-transfer.ts</div>
-          <pre className="overflow-x-auto p-5 font-mono text-xs leading-6 text-muted-foreground"><code><span className="text-primary">const</span> quote = <span className="text-primary">await</span> requestQuote({'{'}{`\n  relayUrl, origin, recipient,\n  amountSats: "1000",\n  maxSponsorFeeSats: "20",\n`}{'}'});{`\n\n`}<span className="text-primary">const</span> call = prepareWalletContractCall({'{'}{`\n  quote: quote.quote,\n  recipient, amountSats: "1000",\n`}{'}'});{`\n\n`}<span className="text-primary">const</span> signed = <span className="text-primary">await</span> request({`\n  "stx_callContract",\n`}{'  {'}{` ...call, network: "testnet" `}{'}'}{`\n`});</code></pre>
+          <pre className="overflow-x-auto p-5 font-mono text-xs leading-6 text-muted-foreground"><code><span className="text-primary">const</span> quote = <span className="text-primary">await</span> requestQuote({'{'}{`\n  relayUrl, origin, recipient,\n  amountSats: "1000",\n  maxSponsorFeeSats: "20",\n`}{'}'});{`\n\n`}<span className="text-primary">const</span> call = prepareWalletContractCall({'{'}{`\n  quote: quote.quote,\n  recipient, amountSats: "1000",\n`}{'}'});{`\n\n`}<span className="text-primary">const</span> signed = <span className="text-primary">await</span> request({`\n  "stx_callContract",\n`}{'  {'}{` ...call, network: "${stacksNetwork}" `}{'}'}{`\n`});</code></pre>
         </div>
       </section>
 
@@ -70,7 +71,7 @@ export default function DevelopersPage() {
           <div>
             <span className="font-mono text-[10px] font-semibold tracking-[0.18em] text-primary">RELAY API</span>
             <h2 className="mt-4 text-4xl font-semibold tracking-[-0.03em]">A deliberately narrow surface.</h2>
-            <p className="mt-5 text-sm leading-6 text-muted-foreground">Version 1 is testnet-only and supports the reviewed sBTC transfer adapter. Public deployments must use HTTPS and an explicit browser-origin allowlist.</p>
+            <p className="mt-5 text-sm leading-6 text-muted-foreground">The interface targets the Stacks network selected at build time. Mainnet transactions require a mainnet-capable relay; the current OSSR relay supports testnet only. Public deployments must use HTTPS and an explicit browser-origin allowlist.</p>
           </div>
           <div className="overflow-hidden rounded-2xl border border-white/10">
             {endpoints.map(([method, path, description]) => <article key={path} className="grid gap-2 border-b border-white/10 p-5 last:border-0 sm:grid-cols-[4rem_1fr]">

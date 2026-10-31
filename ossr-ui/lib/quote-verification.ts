@@ -3,6 +3,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import type { Quote, QuoteResponse } from './ossr';
 import { isValidRelayUrl } from './relay-url';
 import { compressPublicKey } from '@stacks/transactions';
+import { configuredAdapterContract, configuredSbtcContract, isAddressForNetwork, isStandardAddressForNetwork, stacksNetwork } from './network';
 
 export type TransferIntent = { relayUrl: string; origin: string; recipient: string; amountSats: string; maxSponsorFeeSats: string; memo?: string; assetId?: 'sbtc' | 'usdcx' };
 export type QuoteTrust = { publicKey: string; relayId: string; keyId: string; policyVersion: string; adapterContract: string; sbtcContract: string; usdcxContract?: string; sponsorPrincipal: string };
@@ -12,18 +13,18 @@ export function configuredQuoteTrust(): QuoteTrust {
     relayId: process.env.NEXT_PUBLIC_OSSR_RELAY_ID ?? '',
     keyId: process.env.NEXT_PUBLIC_OSSR_QUOTE_KEY_ID ?? '',
     policyVersion: process.env.NEXT_PUBLIC_OSSR_POLICY_VERSION ?? '',
-    adapterContract: process.env.NEXT_PUBLIC_OSSR_ADAPTER_CONTRACT ?? '',
-    sbtcContract: process.env.NEXT_PUBLIC_OSSR_SBTC_CONTRACT ?? '',
-    usdcxContract: process.env.NEXT_PUBLIC_OSSR_USDCX_CONTRACT ?? '',
+    adapterContract: process.env.NEXT_PUBLIC_OSSR_ADAPTER_CONTRACT ?? configuredAdapterContract(),
+    sbtcContract: process.env.NEXT_PUBLIC_OSSR_SBTC_CONTRACT ?? configuredSbtcContract(),
+    usdcxContract: process.env.NEXT_PUBLIC_OSSR_USDCX_CONTRACT ?? (stacksNetwork === 'mainnet' ? '' : 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.mock-usdcx-token'),
     sponsorPrincipal: process.env.NEXT_PUBLIC_OSSR_SPONSOR_PRINCIPAL ?? '',
   };
-  if (Object.values(trust).some(value => !value)) throw new Error('Quote trust is not configured. Configure the trusted relay identity and public key before signing.');
+  if ([trust.publicKey, trust.relayId, trust.keyId, trust.policyVersion, trust.adapterContract, trust.sbtcContract, trust.sponsorPrincipal].some(value => !value)) throw new Error('Quote trust is not configured. Configure the trusted relay identity and public key before signing.');
   return trust;
 }
 export function validateIntent(input: TransferIntent): Record<string, string> {
   const errors: Record<string, string> = {};
   for (const field of ['origin', 'recipient'] as const) {
-    if (!validateStacksAddress(input[field]) || !/^(ST|SN)/.test(input[field]) || addressToString(createAddress(input[field])) !== input[field]) errors[field] = 'Use a canonical Stacks testnet address.';
+    if (!validateStacksAddress(input[field]) || !isAddressForNetwork(input[field]) || (field === 'origin' && !isStandardAddressForNetwork(input[field])) || addressToString(createAddress(input[field])) !== input[field]) errors[field] = `Use a canonical Stacks ${stacksNetwork} address.`;
   }
   if (input.origin === input.recipient) errors.recipient = 'Choose a recipient other than your wallet.';
   for (const field of ['amountSats', 'maxSponsorFeeSats'] as const) {
@@ -44,7 +45,7 @@ export function verifyQuote(response: QuoteResponse, intent: TransferIntent, tru
   const assetId = q.reimbursementAsset.assetId;
   const publicKey = normalizeQuotePublicKey(trust.publicKey);
   const expectedContract = assetId === 'usdcx' ? trust.usdcxContract : trust.sbtcContract;
-  const expected = { protocolVersion: '1', network: 'testnet', action: assetId === 'usdcx' ? 'usdcx-transfer' : 'sbtc-transfer', functionName: 'sponsored-transfer', origin: intent.origin, relayId: trust.relayId, keyId: trust.keyId, policyVersion: trust.policyVersion, adapterContract: trust.adapterContract, sponsorPrincipal: trust.sponsorPrincipal };
+  const expected = { protocolVersion: '1', network: stacksNetwork, action: assetId === 'usdcx' ? 'usdcx-transfer' : 'sbtc-transfer', functionName: 'sponsored-transfer', origin: intent.origin, relayId: trust.relayId, keyId: trust.keyId, policyVersion: trust.policyVersion, adapterContract: trust.adapterContract, sponsorPrincipal: trust.sponsorPrincipal };
   for (const [key, value] of Object.entries(expected)) if (q[key as keyof Quote] !== value) throw new Error(`Untrusted quote ${key}.`);
   if (normalizeQuotePublicKey(response.quotePublicKey) !== publicKey || q.reimbursementAsset.contract !== expectedContract) throw new Error('Untrusted quote key or asset.');
   if (assetId === 'usdcx') {
@@ -64,7 +65,7 @@ export function verifyQuote(response: QuoteResponse, intent: TransferIntent, tru
   if (publicKeyFromSignatureRsv(digestHex, q.signature) !== publicKey || !verifySignature(q.signature.slice(0, 128), digest, publicKey)) throw new Error('Invalid relay quote signature.');
   assertFreshQuote(q, height);
   if (BigInt(q.sponsorFee) > BigInt(intent.maxSponsorFeeSats)) throw new Error('Sponsor fee exceeds your reviewed maximum.');
-  if (!/^[0-9]+$/.test(balance) || BigInt(intent.amountSats) + BigInt(q.sponsorFee) > BigInt(balance)) throw new Error('Insufficient testnet sBTC for amount plus sponsor fee.');
+  if (!/^[0-9]+$/.test(balance) || BigInt(intent.amountSats) + BigInt(q.sponsorFee) > BigInt(balance)) throw new Error(`Insufficient ${stacksNetwork} sBTC for amount plus sponsor fee.`);
 }
 function normalizeQuotePublicKey(value: string): string {
   if (typeof value !== 'string' || !/^(?:0x)?(?:(?:02|03)[0-9a-f]{64}|04[0-9a-f]{128})$/i.test(value)) throw new Error('Malformed quote public key. Use a secp256k1 public key.');
@@ -78,7 +79,7 @@ function splitContractPrincipal(value: string): [string, string] { const [addres
 function hexToBytes(value: string) { return Uint8Array.from(value.slice(2).match(/../g) ?? [], byte => parseInt(byte, 16)); }
 
 function quoteDomainCV() {
-  return tupleCV({ name: stringAsciiCV('ossr-quote'), version: stringAsciiCV('1'), 'chain-id': uintCV(2147483648n) });
+  return tupleCV({ name: stringAsciiCV('ossr-quote'), version: stringAsciiCV('1'), 'chain-id': uintCV(stacksNetwork === 'mainnet' ? 1n : 2147483648n) });
 }
 
 function quoteMessageCV(quote: Quote) {

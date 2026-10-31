@@ -6,7 +6,7 @@
 | Other wallets | Not offered by the connection selector. No compatibility claim. |
 | Chromium, Firefox, WebKit | 114 fixture checks passed across all three engines at 390 and 1440 pixels, including quote/sign/submit and rejection paths; installed extension behavior needs manual evidence. |
 | Mobile | Responsive layout is intended; mobile wallet handoff remains unverified. |
-| Network | Stacks testnet only; no production/mainnet/audit claim. |
+| Network | UI supports network-specific transaction construction and validation. The OSSR relay remains testnet-only; mainnet end-to-end operation and wallet runs are not verified. |
 | Quote trust | Pinned public key and relay identity; signed fields, intent, expiry, fee and balance checked before signing and submission. |
 | Relay outage | Requests time out; saved submitted receipt remains available and polling resumes. Do not resubmit an ambiguous payment. |
 | Persistence | Local browser storage; clearing storage or changing device loses the local receipt. Save the explorer link. |
