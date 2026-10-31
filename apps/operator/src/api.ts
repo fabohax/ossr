@@ -49,6 +49,8 @@ export type RelayApiConfig = {
   betaStuckTransactionMs?: number;
   /** Separate operator-only read credential for loopback accounting/alert data. */
   betaAccountingToken?: string;
+  /** Shared secret for operator health mutations. Required when the registry is writable. */
+  operatorHeartbeatToken?: string;
   /** Existing file pauses new quotes/sponsorships; status/reconciliation remain available. */
   pauseFilePath?: string;
   /** Optional additional HTTP sponsorship payment, settled by an external facilitator. */
@@ -211,11 +213,13 @@ export class OssrRelayApi {
     },
   };
   private readonly confirmedTransactions = new Set<string>();
+  private readonly requestWindows = new Map<string, { startedAt: number; count: number }>();
   private readonly broadcasts = new Map<string, { at: number; reimbursementSats: bigint; assetId: 'sbtc' | 'usdcx' }>();
   private pricingCache?: { expiresAt: number; floorSats: bigint; networkFeeMicroStx: bigint; networkCostSats: bigint };
 
   constructor(private readonly config: RelayApiConfig) {
     if (config.betaAccountingToken && !/^[A-Za-z0-9_-]{43,128}$/.test(config.betaAccountingToken)) throw new Error('Beta accounting token must contain 43–128 base64url characters.');
+    if (config.operatorHeartbeatToken && !/^[A-Za-z0-9_-]{43,128}$/.test(config.operatorHeartbeatToken)) throw new Error('Operator heartbeat token must contain 43–128 base64url characters.');
     if (config.betaStuckTransactionMs !== undefined && (!Number.isSafeInteger(config.betaStuckTransactionMs) || config.betaStuckTransactionMs < 1)) throw new Error('Beta stuck transaction duration must be a positive safe integer.');
     if (config.betaAccountingToken && config.betaAccess && Object.values(config.betaAccess.walletTokens).includes(config.betaAccountingToken)) throw new Error('Operator accounting credentials must differ from invited-wallet credentials.');
     this.betaBudget = config.betaBudget ? new BetaBudget(config.betaBudget) : undefined;
@@ -260,6 +264,9 @@ export class OssrRelayApi {
         }, this.corsAllowedOrigins);
       });
     });
+    server.headersTimeout = 10_000;
+    server.requestTimeout = 30_000;
+    server.keepAliveTimeout = 5_000;
     if (this.config.reimbursementService) {
       const interval = setInterval(() => void this.reconcileReimbursements(), this.config.reimbursementPollIntervalMs ?? 10_000);
       interval.unref();
@@ -528,12 +535,20 @@ export class OssrRelayApi {
       return;
     }
     this.recordRequest(request);
+    const limitClass = request.method === 'POST' && (request.url === '/v1/quotes' || request.url === '/v1/sponsor' || request.url === '/v1/sponsorships') ? 'write' : 'read';
+    const rateLimit = limitPublicRequest(this.requestWindows, request.socket.remoteAddress ?? 'unknown', limitClass);
+    if (rateLimit) {
+      response.setHeader('Retry-After', String(rateLimit.retryAfterSeconds));
+      respond(request, response, 429, { error: 'RATE_LIMITED', message: 'Too many requests. Retry later.' }, this.corsAllowedOrigins);
+      return;
+    }
     if (request.method === 'GET' && request.url === '/v1/info') {
       respond(request, response, 200, await this.info(), this.corsAllowedOrigins);
       return;
     }
     if (request.method === 'GET' && request.url === '/v1/metrics') {
-      respond(request, response, 200, await this.metricsSnapshot(), this.corsAllowedOrigins);
+      if (!isLoopback(request.socket.remoteAddress)) { respond(request, response, 404, { error: 'NOT_FOUND', message: 'Not found.' }, []); return; }
+      respond(request, response, 200, await this.metricsSnapshot(), []);
       return;
     }
     if (request.method === 'GET' && request.url === '/health/live') {
@@ -542,10 +557,15 @@ export class OssrRelayApi {
     }
     if (request.method === 'GET' && request.url === '/health/ready') {
       const health = await this.config.operator.health();
-      respond(request, response, health.healthy ? 200 : 503, { status: health.healthy ? 'ready' : 'not_ready', operator: health }, this.corsAllowedOrigins);
+      respond(request, response, health.healthy ? 200 : 503, { status: health.healthy ? 'ready' : 'not_ready' }, []);
       return;
     }
     if (request.method === 'POST' && request.url === '/operator/heartbeat' && this.config.healthRegistry) {
+      const presented = request.headers.authorization?.match(/^Bearer ([A-Za-z0-9_-]{43,128})$/)?.[1];
+      const expected = this.config.operatorHeartbeatToken;
+      if (!expected || !presented || createHash('sha256').update(presented).digest('hex') !== createHash('sha256').update(expected).digest('hex') || !isLoopback(request.socket.remoteAddress) || request.headers['x-forwarded-for'] || request.headers.forwarded || request.headers['x-real-ip']) {
+        respond(request, response, 403, { error: 'FORBIDDEN', message: 'Authenticated direct loopback access is required.' }, []); return;
+      }
       if (!request.headers['content-type']?.toLowerCase().startsWith('application/json')) {
         respond(request, response, 415, { error: 'UNSUPPORTED_MEDIA_TYPE', message: 'Content-Type must be application/json.' }, this.corsAllowedOrigins);
         return;
@@ -592,7 +612,7 @@ export class OssrRelayApi {
     }
     if (request.method === 'GET' && request.url === '/v1/activity') {
       // Operational history is local-only, including when the relay binds publicly.
-      if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? '')) {
+      if (!isLoopback(request.socket.remoteAddress)) {
         respond(request, response, 403, { error: 'FORBIDDEN', message: 'Activity is available only over loopback.' }, this.corsAllowedOrigins);
         return;
       }
@@ -720,18 +740,20 @@ export class OssrRelayApi {
   }
 
   private usdcxEnabled(): boolean {
-    return Boolean(this.config.usdcxAdapterContractAddress && this.config.usdcxSponsorFeeUnits !== undefined);
+    return this.config.operator.network === 'testnet' && Boolean(this.config.usdcxAdapterContractAddress && this.config.usdcxSponsorFeeUnits !== undefined);
   }
 
   private adapterContract(): string | undefined {
-    const address = this.config.adapterContractAddress ?? process.env.ADAPTER_CONTRACT_ADDRESS?.trim();
-    const name = this.config.adapterContractName ?? process.env.ADAPTER_CONTRACT_NAME?.trim() ?? 'sbtc-sponsored-transfer-v1';
+    const mainnet = this.config.operator.network === 'mainnet';
+    const address = this.config.adapterContractAddress ?? process.env[mainnet ? 'MAINNET_ADAPTER_CONTRACT_ADDRESS' : 'ADAPTER_CONTRACT_ADDRESS']?.trim() ?? (mainnet ? 'SP17M2KWEK37A5MPDTMWGXJFGJCY41JVQKVK828TQ' : undefined);
+    const name = this.config.adapterContractName ?? process.env[mainnet ? 'MAINNET_ADAPTER_CONTRACT_NAME' : 'ADAPTER_CONTRACT_NAME']?.trim() ?? (mainnet ? 'sbtc-sponsored-transfer-mainnet-v1' : 'sbtc-sponsored-transfer-v1');
     return address ? `${address}.${name}` : undefined;
   }
 
   private sbtcContract(): string | undefined {
-    const address = this.config.sbtcContractAddress ?? process.env.SBTC_CONTRACT_ADDRESS?.trim() ?? 'SN3VMHXEN64ZZF71JQ5VESXDWTR301XTTXGF4J8F1';
-    const name = this.config.sbtcContractName ?? process.env.SBTC_CONTRACT_NAME?.trim() ?? 'sbtc-token';
+    const mainnet = this.config.operator.network === 'mainnet';
+    const address = this.config.sbtcContractAddress ?? process.env[mainnet ? 'MAINNET_SBTC_CONTRACT_ADDRESS' : 'SBTC_CONTRACT_ADDRESS']?.trim() ?? (mainnet ? 'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4' : 'SN3VMHXEN64ZZF71JQ5VESXDWTR301XTTXGF4J8F1');
+    const name = this.config.sbtcContractName ?? process.env[mainnet ? 'MAINNET_SBTC_CONTRACT_NAME' : 'SBTC_CONTRACT_NAME']?.trim() ?? 'sbtc-token';
     return `${address}.${name}`;
   }
 

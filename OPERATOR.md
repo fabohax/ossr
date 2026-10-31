@@ -50,7 +50,7 @@ STACKS_SIMULATION_API_URL=http://127.0.0.1:20443
 STACKS_SIMULATION_AUTH_TOKEN=your-secret-token
 ```
 
-Keep `OPERATOR_HOST=127.0.0.1`; Caddy will be the only public entry point.
+Keep `OPERATOR_HOST=127.0.0.1`; Caddy will be the only public entry point. Do not proxy `/v1/metrics`, `/v1/activity`, `/v1/beta/accounting`, or `/operator/heartbeat`; they are restricted to direct loopback access. Apply request and connection limits in Caddy and at the host firewall, and set `OPERATOR_HEARTBEAT_TOKEN` if using registry heartbeat updates.
 
 Protect the configuration:
 
