@@ -1,10 +1,10 @@
 const invoke = window.__TAURI__?.core?.invoke;
 const $ = (id) => document.getElementById(id);
-const defaultNodeUrl = 'http://127.0.0.1:20453';
+const defaultNodeUrl = 'http://127.0.0.1:20443';
 const savedNodeUrl = localStorage.getItem('nodeUrl');
 const config = {
   relayUrl: localStorage.getItem('relayUrl') || 'http://127.0.0.1:3002',
-  nodeUrl: savedNodeUrl && savedNodeUrl !== 'http://127.0.0.1:20443' ? savedNodeUrl : defaultNodeUrl,
+  nodeUrl: savedNodeUrl && savedNodeUrl !== 'http://127.0.0.1:20453' ? savedNodeUrl : defaultNodeUrl,
   referenceUrl: localStorage.getItem('referenceUrl') || 'https://api.testnet.hiro.so',
 };
 let serviceState;

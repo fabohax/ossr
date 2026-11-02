@@ -148,9 +148,12 @@ function displayError(error: unknown): DisplayError {
   }
   if (error instanceof RelayRequestError) {
     const guidance = error.code ? errorGuidance[error.code] : undefined;
+    const message = error.code === 'SIMULATION_UNAVAILABLE'
+      ? 'The relay could not reach its transaction simulation service. Your transfer was not broadcast.'
+      : error.message;
     return {
       title: guidance?.title ?? (error.status === 422 ? 'The relay could not approve this transaction' : 'The relay rejected the request'),
-      message: error.message,
+      message,
       action: guidance?.action,
       code: [error.code, `HTTP ${error.status}`].filter(Boolean).join(' · '),
     };

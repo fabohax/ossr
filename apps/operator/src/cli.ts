@@ -64,7 +64,7 @@ async function main(): Promise<void> {
     if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error('OPERATOR_PORT must be a valid TCP port.');
     const quotePrivateKey = required(isMainnet ? 'MAINNET_QUOTE_PRIVATE_KEY' : 'QUOTE_PRIVATE_KEY');
     if (isMainnet && quotePrivateKey === sponsorPrivateKey) throw new Error('Mainnet quote and sponsor keys must be different.');
-    const simulationApiUrl = isMainnet ? required('MAINNET_STACKS_SIMULATION_API_URL') : process.env.STACKS_SIMULATION_API_URL?.trim();
+    const simulationApiUrl = required(isMainnet ? 'MAINNET_STACKS_SIMULATION_API_URL' : 'STACKS_SIMULATION_API_URL');
     if (isMainnet && process.env.MAINNET_SBTC_DYNAMIC_PRICING !== 'true') throw new Error('Set MAINNET_SBTC_DYNAMIC_PRICING=true before serving mainnet sponsorships.');
     // Testnet PoC default: the configured user wallet is the reimbursement payer.
     // Fallback to the operator sponsor key so the reimbursement worker is active by default.
